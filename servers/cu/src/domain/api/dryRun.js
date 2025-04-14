@@ -1,7 +1,6 @@
 import { Readable } from 'node:stream'
 import { omit, pick } from 'ramda'
 import { Rejected, Resolved, of } from 'hyper-async'
-import AsyncLock from 'async-lock'
 
 import { loadMessageMetaWith } from '../lib/loadMessageMeta.js'
 import { evaluateWith } from '../lib/evaluate.js'
@@ -80,9 +79,6 @@ export function dryRunWith (env) {
   
   // Performance metrics tracking
   const dryRunPerformance = new Map()
-  
-  // Create a lock to prevent multiple simultaneous dry runs of the same request
-  const dryRunLock = new AsyncLock()
 
   function loadMessageCtx ({ messageTxId, processId }) {
     /**
@@ -176,127 +172,119 @@ export function dryRunWith (env) {
     // Create a cache key based on the request parameters
     const cacheKey = JSON.stringify({ processId, messageTxId, dryRun })
     
-    // Acquire a lock for this specific dry run to prevent duplicate processing
-    return of(cacheKey)
-      .chain(fromPromise(async (cacheKey) => {
-        // Using a lock to ensure only one thread can check and update cache at a time
-        return dryRunLock.acquire(cacheKey, () => {
-          // Check if we have a cached result for this exact request
-          const cachedResult = dryRunResultsCache.get(cacheKey)
-          if (cachedResult) {
-            const perfInfo = dryRunPerformance.get(cacheKey)
-            if (perfInfo) {
-              logger.info('Cached dry run reused for process "%s" (original computation took %d ms)', 
-                processId, perfInfo.duration)
-            } else {
-              logger.info('Cached dry run reused for process "%s"', processId)
-            }
-            return cachedResult
-          }
-          
-          // Check if this exact dry run is already in progress
-          if (inProgressDryRuns.has(cacheKey)) {
-            logger.info('Waiting for in-progress dry run for process "%s"', processId)
-            // Return the promise for the in-progress evaluation
-            return inProgressDryRuns.get(cacheKey)
-          }
-          
-          // Start performance measurement
-          const startTime = Date.now()
-          
-          // Create a new dry run evaluation and track it
-          const dryRunPromise = of({ processId, messageTxId })
-            .chain(loadMessageCtx)
-            .chain(ensureProcessLoaded({ maxProcessAge }))
-            .chain(ensureModuleLoaded)
+    // Check if we have a cached result for this exact request
+    const cachedResult = dryRunResultsCache.get(cacheKey)
+    if (cachedResult) {
+      const perfInfo = dryRunPerformance.get(cacheKey)
+      if (perfInfo) {
+        logger.info('Cached dry run reused for process "%s" (original computation took %d ms)', 
+          processId, perfInfo.duration)
+      } else {
+        logger.info('Cached dry run reused for process "%s"', processId)
+      }
+      return Resolved(cachedResult)
+    }
+    
+    // Check if this exact dry run is already in progress
+    if (inProgressDryRuns.has(cacheKey)) {
+      logger.info('Waiting for in-progress dry run for process "%s"', processId)
+      // Return the promise for the in-progress evaluation
+      return of(inProgressDryRuns.get(cacheKey))
+    }
+    
+    // Start performance measurement
+    const startTime = Date.now()
+    
+    // Create a new dry run evaluation and track it
+    const dryRunPromise = of({ processId, messageTxId })
+      .chain(loadMessageCtx)
+      .chain(ensureProcessLoaded({ maxProcessAge }))
+      .chain(ensureModuleLoaded)
+      /**
+       * We've read up to 'to', now inject the dry-run message
+       *
+       * { id, owner, tags, output: { Memory, Error, Messages, Spawns, Output } }
+       */
+      .chain((ctx) => {
+        async function * dryRunMessage () {
+          /**
+           * Dry run messages are not signed, and therefore
+           * will not have a verifiable Id, Signature, Owner, etc.
+           *
+           * NOTE:
+           * Dry Run messages are not signed, therefore not verifiable.
+           *
+           * This is generally okay, because dry-run message evaluations
+           * are Read-Only and not persisted -- the primary use-case for Dry Run is to enable
+           * retrieving a view of a processes state, without having to send a bonafide message.
+           *
+           * However, we should keep in mind the implications. One implication is that spoofing
+           * Owner or other fields on a Dry-Run message (unverifiable context) exposes a way to
+           * "poke and prod" a process modules for vulnerabilities.
+           */
+          yield messageSchema.parse({
             /**
-             * We've read up to 'to', now inject the dry-run message
-             *
-             * { id, owner, tags, output: { Memory, Error, Messages, Spawns, Output } }
+             * Don't save the dryRun message
              */
-            .chain((ctx) => {
-              async function * dryRunMessage () {
-                /**
-                 * Dry run messages are not signed, and therefore
-                 * will not have a verifiable Id, Signature, Owner, etc.
-                 *
-                 * NOTE:
-                 * Dry Run messages are not signed, therefore not verifiable.
-                 *
-                 * This is generally okay, because dry-run message evaluations
-                 * are Read-Only and not persisted -- the primary use-case for Dry Run is to enable
-                 * retrieving a view of a processes state, without having to send a bonafide message.
-                 *
-                 * However, we should keep in mind the implications. One implication is that spoofing
-                 * Owner or other fields on a Dry-Run message (unverifiable context) exposes a way to
-                 * "poke and prod" a process modules for vulnerabilities.
-                 */
-                yield messageSchema.parse({
-                  /**
-                   * Don't save the dryRun message
-                   */
-                  noSave: true,
-                  deepHash: undefined,
-                  cron: undefined,
-                  ordinate: ctx.ordinate,
-                  name: 'Dry Run Message',
-                  message: {
-                    /**
-                     * We default timestamp and block-height using
-                     * the current evaluation.
-                     *
-                     * The Dry-Run message can overwrite them
-                     */
-                    Timestamp: ctx.from,
-                    'Block-Height': ctx.fromBlockHeight,
-                    Cron: false,
-                    Target: processId,
-                    ...dryRun,
-                    From: mapFrom({ tags: dryRun.Tags, owner: dryRun.Owner }),
-                    'Read-Only': true
-                  },
-                  AoGlobal: {
-                    Process: { Id: processId, Owner: ctx.owner, Tags: ctx.tags },
-                    Module: { Id: ctx.moduleId, Owner: ctx.moduleOwner, Tags: ctx.moduleTags }
-                  }
-                })
-              }
-
+            noSave: true,
+            deepHash: undefined,
+            cron: undefined,
+            ordinate: ctx.ordinate,
+            name: 'Dry Run Message',
+            message: {
               /**
-               * Pass a messages stream to evaluate that only emits the single dry-run
-               * message and then completes
+               * We default timestamp and block-height using
+               * the current evaluation.
+               *
+               * The Dry-Run message can overwrite them
                */
-              return evaluate({ ...ctx, dryRun: true, messages: Readable.from(dryRunMessage()) })
-            })
-            .map((res) => {
-              const endTime = Date.now()
-              const duration = endTime - startTime
-              
-              const result = omit(['Memory'], res.output)
-              // Cache the result for 1 second
-              dryRunResultsCache.set(cacheKey, result, 1000)
-              
-              // Store performance metrics
-              dryRunPerformance.set(cacheKey, {
-                startTime,
-                endTime,
-                duration
-              })
-              
-              logger.info('Completed dry run computation for process "%s" in %d ms', 
-                processId, duration)
-              
-              // Remove from in-progress tracking
-              inProgressDryRuns.delete(cacheKey)
-              return result
-            })
-          
-          // Store the promise in our in-progress map
-          const promise = dryRunPromise.toPromise()
-          inProgressDryRuns.set(cacheKey, promise)
-          
-          return promise
+              Timestamp: ctx.from,
+              'Block-Height': ctx.fromBlockHeight,
+              Cron: false,
+              Target: processId,
+              ...dryRun,
+              From: mapFrom({ tags: dryRun.Tags, owner: dryRun.Owner }),
+              'Read-Only': true
+            },
+            AoGlobal: {
+              Process: { Id: processId, Owner: ctx.owner, Tags: ctx.tags },
+              Module: { Id: ctx.moduleId, Owner: ctx.moduleOwner, Tags: ctx.moduleTags }
+            }
+          })
+        }
+
+        /**
+         * Pass a messages stream to evaluate that only emits the single dry-run
+         * message and then completes
+         */
+        return evaluate({ ...ctx, dryRun: true, messages: Readable.from(dryRunMessage()) })
+      })
+      .map((res) => {
+        const endTime = Date.now()
+        const duration = endTime - startTime
+        
+        const result = omit(['Memory'], res.output)
+        // Cache the result for 1 second
+        dryRunResultsCache.set(cacheKey, result, 1000)
+        
+        // Store performance metrics
+        dryRunPerformance.set(cacheKey, {
+          startTime, 
+          endTime,
+          duration
         })
-      }))
+        
+        logger.info('Completed dry run computation for process "%s" in %d ms', 
+          processId, duration)
+        
+        // Remove from in-progress tracking
+        inProgressDryRuns.delete(cacheKey)
+        return result
+      })
+    
+    // Store the promise in our in-progress map
+    inProgressDryRuns.set(cacheKey, dryRunPromise.toPromise())
+    
+    return dryRunPromise
   }
 }
