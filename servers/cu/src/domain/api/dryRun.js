@@ -202,8 +202,8 @@ export function dryRunWith (env) {
     // Start performance measurement
     const startTime = Date.now()
     
-    // Generate unique identifier for this dry run computation
-    const runId = `${startTime.toString().slice(-4)}-${generateRandomId()}`
+    // Generate unique identifier for this dry run computation - full timestamp + random chars
+    const runId = `${startTime}-${generateRandomId()}`
     logger.info('Starting new dry run computation for process "%s" (run ID: %s)', 
       processId, runId)
     
