@@ -79,6 +79,11 @@ export function dryRunWith (env) {
   
   // Performance metrics tracking
   const dryRunPerformance = new Map()
+  
+  // Generate a random 4-character string for unique run IDs
+  function generateRandomId() {
+    return Math.random().toString(36).substring(2, 6).toUpperCase();
+  }
 
   function loadMessageCtx ({ messageTxId, processId }) {
     /**
@@ -177,8 +182,8 @@ export function dryRunWith (env) {
     if (cachedResult) {
       const perfInfo = dryRunPerformance.get(cacheKey)
       if (perfInfo) {
-        logger.info('Cached dry run reused for process "%s" (original computation took %d ms)', 
-          processId, perfInfo.duration)
+        logger.info('Cached dry run reused for process "%s" (original run ID: %s, computation took %d ms)', 
+          processId, perfInfo.runId, perfInfo.duration)
       } else {
         logger.info('Cached dry run reused for process "%s"', processId)
       }
@@ -187,13 +192,20 @@ export function dryRunWith (env) {
     
     // Check if this exact dry run is already in progress
     if (inProgressDryRuns.has(cacheKey)) {
-      logger.info('Waiting for in-progress dry run for process "%s"', processId)
+      const runInfo = inProgressDryRuns.get(cacheKey)
+      logger.info('Waiting for in-progress dry run for process "%s" (run ID: %s)', 
+        processId, runInfo.runId)
       // Return the promise for the in-progress evaluation
-      return of(inProgressDryRuns.get(cacheKey))
+      return of(runInfo.promise)
     }
     
     // Start performance measurement
     const startTime = Date.now()
+    
+    // Generate unique identifier for this dry run computation
+    const runId = `${startTime.toString().slice(-4)}-${generateRandomId()}`
+    logger.info('Starting new dry run computation for process "%s" (run ID: %s)', 
+      processId, runId)
     
     // Create a new dry run evaluation and track it
     const dryRunPromise = of({ processId, messageTxId })
@@ -267,23 +279,25 @@ export function dryRunWith (env) {
         // Cache the result for 1 second
         dryRunResultsCache.set(cacheKey, result, 1000)
         
-        // Store performance metrics
+        // Store performance metrics with run ID
         dryRunPerformance.set(cacheKey, {
+          runId,
           startTime, 
           endTime,
           duration
         })
         
-        logger.info('Completed dry run computation for process "%s" in %d ms', 
-          processId, duration)
+        logger.info('Completed dry run computation for process "%s" (run ID: %s) in %d ms', 
+          processId, runId, duration)
         
         // Remove from in-progress tracking
         inProgressDryRuns.delete(cacheKey)
         return result
       })
     
-    // Store the promise in our in-progress map
-    inProgressDryRuns.set(cacheKey, dryRunPromise.toPromise())
+    // Store the promise and run ID in our in-progress map
+    const promise = dryRunPromise.toPromise()
+    inProgressDryRuns.set(cacheKey, { promise, runId })
     
     return dryRunPromise
   }
