@@ -74,6 +74,8 @@ export function dryRunWith (env) {
   const readStateCache = TtlCache(env)
   // Cache for dry run results to avoid redundant computation
   const dryRunResultsCache = TtlCache(env)
+  // Track in-progress dry runs to prevent duplicate concurrent evaluations
+  const inProgressDryRuns = new Map()
 
   function loadMessageCtx ({ messageTxId, processId }) {
     /**
@@ -174,7 +176,15 @@ export function dryRunWith (env) {
       return Resolved(cachedResult)
     }
     
-    return of({ processId, messageTxId })
+    // Check if this exact dry run is already in progress
+    if (inProgressDryRuns.has(cacheKey)) {
+      logger.info('Waiting for in-progress dry run for process "%s"', processId)
+      // Return the promise for the in-progress evaluation
+      return of(inProgressDryRuns.get(cacheKey))
+    }
+    
+    // Create a new dry run evaluation and track it
+    const dryRunPromise = of({ processId, messageTxId })
       .chain(loadMessageCtx)
       .chain(ensureProcessLoaded({ maxProcessAge }))
       .chain(ensureModuleLoaded)
@@ -241,7 +251,14 @@ export function dryRunWith (env) {
         const result = omit(['Memory'], res.output)
         // Cache the result for 1 second
         dryRunResultsCache.set(cacheKey, result, 1000)
+        // Remove from in-progress tracking
+        inProgressDryRuns.delete(cacheKey)
         return result
       })
+    
+    // Store the promise in our in-progress map
+    inProgressDryRuns.set(cacheKey, dryRunPromise.toPromise())
+    
+    return dryRunPromise
   }
 }
