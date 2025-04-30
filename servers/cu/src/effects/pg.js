@@ -168,9 +168,8 @@ const createCheckpointFilesIndexes = async (pool) => pool.query(
  * and less deps. So we'll do this for now.
  */
 function toOrdinals (sql) {
-  let count = 0;
-  sql = sql.trim();
-
+  let count = 0
+  sql = sql.trim()
   if (sql.startsWith('INSERT')) {
     // Handle INSERT OR IGNORE
     if (sql.includes('INSERT OR IGNORE')) {
@@ -202,6 +201,5 @@ function toOrdinals (sql) {
       }
     }
   }
-
-  return sql.replace(/\?/g, () => `$${++count}`);
+  return sql.replace(/\?/g, () => `$${++count}`)
 }
