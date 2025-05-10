@@ -5,6 +5,7 @@ import { always, compose } from 'ramda'
  * was created with the fix
  */
 import httpProxy from 'http-proxy-node16'
+import https from 'https'
 
 /**
  * TODO: we could inject these, but just keeping simple for now
@@ -18,7 +19,19 @@ export function proxyWith ({ aoUnit, hosts, surUrl, processToHost, ownerToHost }
   const _logger = logger.child('proxy')
   _logger('Configuring to reverse proxy ao %s units...', aoUnit)
 
-  const proxy = httpProxy.createProxyServer({})
+  // Create a custom HTTPS agent that properly verifies certificates
+  const httpsAgent = new https.Agent({
+    keepAlive: true,
+    rejectUnauthorized: true // Properly verify SSL certificates
+  })
+
+  // Configure the proxy server with secure TLS/HTTPS options
+  const proxy = httpProxy.createProxyServer({
+    secure: true, // Verify SSL certificates
+    changeOrigin: true, // Change the origin of the host header to the target URL
+    agent: httpsAgent, // Use our secure agent
+    xfwd: true // Add x-forwarded headers
+  })
 
   const bailout = aoUnit === 'cu' ? bailoutWith({ fetch, surUrl, processToHost, ownerToHost }) : undefined
   const determineHost = determineHostWith({ hosts, bailout })
@@ -97,7 +110,25 @@ export function proxyWith ({ aoUnit, hosts, surUrl, processToHost, ownerToHost }
              * Reverse proxy the request to the underlying selected host.
              * If an error occurs, return the next iteration for our trampoline to invoke.
              */
-            proxy.web(req, res, { target: host, buffer }, (err) => {
+            const isHttps = host.startsWith('https://')
+            const proxyOptions = { 
+              target: host, 
+              buffer,
+              secure: true, // Properly verify SSL certificates
+              changeOrigin: true, // Change the origin of the host header to the target URL
+              xfwd: true, // Add x-forwarded headers
+              prependPath: false, // Don't prepend the target path to the requested path
+              hostRewrite: true, // Rewrite the host header to match the target
+              autoRewrite: true // Automatically rewrite the location header
+            }
+            
+            // For HTTPS targets, ensure we're using proper TLS
+            if (isHttps) {
+              proxyOptions.agent = httpsAgent
+              _logger('Using secure HTTPS options for proxying to %s', host)
+            }
+            
+            proxy.web(req, res, proxyOptions, (err) => {
               /**
                * No error occurred, so we're done
                */
