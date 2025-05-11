@@ -99,8 +99,19 @@ export function proxyWith ({ aoUnit, hosts, surUrl, processToHost, ownerToHost }
         if (!processId) return res.status(404).send({ error: 'Process id not found on request' })
 
         async function revProxy ({ failoverAttempt, err }) {
+          /**
+           * In cases where we have to consume the request stream before proxying
+           * it, we allow passing a restreamBody to get a fresh stream to send along
+           * on the proxied request.
+           *
+           * If not needed, then this is simply set to undefined, which uses the unconsumed
+           * request stream from the original request object
+           *
+           * See buffer option on https://www.npmjs.com/package/http-proxy#options
+           */
+          // For the proxy to work correctly, avoid buffering the request
           // Let http-proxy handle the streaming directly
-          const buffer = undefined
+          const buffer = undefined;
 
           const host = await determineHost({ processId, failoverAttempt })
 
@@ -114,30 +125,33 @@ export function proxyWith ({ aoUnit, hosts, surUrl, processToHost, ownerToHost }
             }
 
             _logger('Reverse Proxying process %s to host %s', processId, host)
-            
-            // Record start time for metrics
-            const requestStartTime = Date.now()
-            
-            // Configure proxy options with minimal settings to avoid complications
+            /**
+             * Reverse proxy the request to the underlying selected host.
+             * If an error occurs, return the next iteration for our trampoline to invoke.
+             */
+            // Use minimal proxy options to avoid complications
             const proxyOptions = { 
               target: host,
               secure: true
             }
             
-            // For HTTPS targets, ensure proper TLS
+            // For HTTPS targets, ensure we're using proper TLS
             if (host.startsWith('https://')) {
               proxyOptions.agent = httpsAgent
               _logger('Using secure HTTPS options for proxying to %s', host)
             }
+            
+            // Record start time for metrics
+            const startTime = Date.now()
             
             // Create metrics data object
             const metricsData = {
               method: req.method,
               path: req.path || req.url,
               endpoint: req.method + ' ' + (req.path || req.url),
-              processId,
+              processId: processId,
               query: req.query,
-              timestamp: requestStartTime
+              timestamp: requestStartTime,
             }
             
             // Extract tags and action data from request body if available
@@ -162,7 +176,10 @@ export function proxyWith ({ aoUnit, hosts, surUrl, processToHost, ownerToHost }
               }
             }
             
-            // Execute the proxy request with basic error handling
+            // Record start time for metrics (MUST be defined here for proper scope)
+            const requestStartTime = Date.now()
+            
+            // Execute the proxy request with error handling
             proxy.web(req, res, proxyOptions, (err) => {
               const responseTime = Date.now() - requestStartTime
               
@@ -173,10 +190,10 @@ export function proxyWith ({ aoUnit, hosts, surUrl, processToHost, ownerToHost }
                 metricsService.recordRequest({
                   method: req.method,
                   path: req.path || req.url,
-                  processId,
+                  processId: processId,
                   error: err.message,
                   statusCode: 502,
-                  responseTime,
+                  responseTime: responseTime,
                   timestamp: requestStartTime
                 })
                 
@@ -188,9 +205,9 @@ export function proxyWith ({ aoUnit, hosts, surUrl, processToHost, ownerToHost }
               metricsService.recordRequest({
                 method: req.method,
                 path: req.path || req.url,
-                processId,
+                processId: processId,
                 statusCode: res.statusCode || 200,
-                responseTime,
+                responseTime: responseTime,
                 timestamp: requestStartTime
               })
               
