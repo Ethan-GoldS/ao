@@ -128,85 +128,112 @@ setInterval(() => {
  * @returns {Object} All metrics
  */
 export function getMetrics() {
-  // Calculate average durations for easier display
-  const processTimingWithAvg = {};
-  Object.keys(metrics.processTiming).forEach(processId => {
-    const { totalDuration, count } = metrics.processTiming[processId];
-    processTimingWithAvg[processId] = {
-      totalDuration,
-      count,
-      avgDuration: count > 0 ? totalDuration / count : 0
+  try {
+    _logger('Fetching metrics for dashboard display');
+    
+    // Use cached recent requests or fetch from database
+    const recentRequests = recentRequestsCache.length > 0 ? 
+      recentRequestsCache : db.getRecentRequests(MAX_RECENT_REQUESTS);
+    
+    // Update cache if needed
+    if (recentRequestsCache.length === 0 && recentRequests.length > 0) {
+      recentRequestsCache = recentRequests;
+    }
+    
+    // Get process and action counts from database
+    const processCounts = db.getProcessCounts();
+    const actionCounts = db.getActionCounts();
+    
+    // Get timing metrics from database
+    const processTiming = db.getProcessTiming();
+    const actionTiming = db.getActionTiming();
+    
+    // Add average durations for easier display
+    const processTimingWithAvg = {};
+    Object.entries(processTiming).forEach(([processId, data]) => {
+      processTimingWithAvg[processId] = {
+        ...data,
+        avgDuration: data.count > 0 ? data.totalDuration / data.count : 0
+      };
+    });
+    
+    const actionTimingWithAvg = {};
+    Object.entries(actionTiming).forEach(([action, data]) => {
+      actionTimingWithAvg[action] = {
+        ...data,
+        avgDuration: data.count > 0 ? data.totalDuration / data.count : 0
+      };
+    });
+    
+    // Get IP and referrer counts from database
+    const ipCounts = db.getIpCounts();
+    const referrerCounts = db.getReferrerCounts();
+    
+    // Get time series data from database
+    const timeSeriesData = db.getTimeSeriesData(TIME_SERIES_BUCKETS);
+    
+    // Build request details object by process ID
+    const requestDetails = {};
+    
+    // Only populate request details for processes that have recent requests
+    // This avoids loading all details at once, which could be inefficient
+    const processIds = Object.keys(processCounts).slice(0, 20); // Limit to 20 most recent processes
+    for (const processId of processIds) {
+      // Fetch details for this process
+      requestDetails[processId] = db.getRequestDetails(processId, 20);
+    }
+    
+    _logger('Successfully retrieved metrics for dashboard');
+    
+    return {
+      // Recent requests 
+      recentRequests,
+      
+      // Request details keyed by process ID
+      requestDetails,
+      
+      // Process counts for histogram
+      processCounts,
+      
+      // Action counts for histogram
+      actionCounts,
+      
+      // Process timing metrics (total duration and count)
+      processTiming: processTimingWithAvg,
+      
+      // Action timing metrics (total duration and count)
+      actionTiming: actionTimingWithAvg,
+      
+      // IP address counts
+      ipCounts,
+      
+      // Referrer counts
+      referrerCounts,
+      
+      // Time series data for charts
+      timeSeriesData,
+      
+      // Total number of requests
+      totalRequests: db.getTotalRequests(),
+      
+      // Server start time
+      startTime
     };
-  });
-  
-  const actionTimingWithAvg = {};
-  Object.keys(metrics.actionTiming).forEach(action => {
-    const { totalDuration, count } = metrics.actionTiming[action];
-    actionTimingWithAvg[action] = {
-      totalDuration,
-      count,
-      avgDuration: count > 0 ? totalDuration / count : 0
+  } catch (err) {
+    _logger('Error retrieving metrics: %O', err);
+    // Return empty metrics rather than crashing
+    return {
+      recentRequests: [],
+      requestDetails: {},
+      processCounts: {},
+      actionCounts: {},
+      processTiming: {},
+      actionTiming: {},
+      ipCounts: {},
+      referrerCounts: {},
+      timeSeriesData: [],
+      totalRequests: 0,
+      startTime
     };
-  });
-  
-  // Get process and action counts from database
-  const processCounts = db.getProcessCounts();
-  const actionCounts = db.getActionCounts();
-  
-  // Get timing metrics from database
-  const processTiming = db.getProcessTiming();
-  const actionTiming = db.getActionTiming();
-  
-  // Get IP and referrer counts from database
-  const ipCounts = db.getIpCounts();
-  const referrerCounts = db.getReferrerCounts();
-  
-  // Get time series data from database
-  const timeSeriesData = db.getTimeSeriesData(TIME_SERIES_BUCKETS);
-  
-  // Build request details object by process ID
-  const requestDetails = {};
-  
-  // Only populate request details for processes that have recent requests
-  // This avoids loading all details at once, which could be inefficient
-  const processIds = Object.keys(processCounts);
-  processIds.forEach(processId => {
-    // Fetch details for this process
-    requestDetails[processId] = db.getRequestDetails(processId, 20);
-  });
-  
-  return {
-    // Recent requests 
-    recentRequests,
-    
-    // Request details keyed by process ID
-    requestDetails,
-    
-    // Process counts for histogram
-    processCounts,
-    
-    // Action counts for histogram
-    actionCounts,
-    
-    // Process timing metrics (total duration and count)
-    processTiming,
-    
-    // Action timing metrics (total duration and count)
-    actionTiming,
-    
-    // IP address counts
-    ipCounts,
-    
-    // Referrer counts
-    referrerCounts,
-    
-    // Time series data for charts
-    timeSeriesData,
-    
-    // Total number of requests
-    totalRequests: db.getTotalRequests(),
-    
-    // Server start time
-    startTime
-  };
+  }
 }
