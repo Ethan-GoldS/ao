@@ -275,33 +275,54 @@ export async function getClientMetrics() {
  */
 export async function getTimeSeriesData(hours = 24) {
   try {
-    // First attempt to use time_received column
-    try {
-      const result = await query(
-        `SELECT 
-           date_trunc('hour', time_received) as hour,
-           COUNT(*) as total_requests,
-           jsonb_object_agg(process_id, process_count) as process_counts
-         FROM (
-           SELECT 
+    // Check for existence of time_received column
+    const columnCheck = await query(
+      `SELECT column_name 
+       FROM information_schema.columns 
+       WHERE table_name = 'metrics_requests' 
+       AND column_name = 'time_received'`
+    );
+    
+    if (columnCheck.rows.length > 0) {
+      // Column exists, use it
+      try {
+        const result = await query(
+          `SELECT 
              date_trunc('hour', time_received) as hour,
-             process_id,
-             COUNT(*) as process_count
-           FROM metrics_requests
-           WHERE time_received > NOW() - interval '${hours} hours'
-           GROUP BY hour, process_id
-           ORDER BY hour, process_count DESC
-         ) AS hourly_process_counts
-         GROUP BY hour
-         ORDER BY hour ASC`,
-        [], // params
-        10000 // 10 second timeout
-      )
-      // If we got here, query succeeded
-      return await processTimeSeriesResults(result, hours)
-    } catch (err) {
-      // If time_received column doesn't exist, try using timestamp instead
-      _logger('Error querying with time_received, trying timestamp: %s', err.message)
+             COUNT(*) as total_requests,
+             jsonb_object_agg(process_id, process_count) as process_counts
+           FROM (
+             SELECT 
+               date_trunc('hour', time_received) as hour,
+               process_id,
+               COUNT(*) as process_count
+             FROM metrics_requests
+             WHERE time_received > NOW() - interval '${hours} hours'
+             GROUP BY hour, process_id
+             ORDER BY hour, process_count DESC
+           ) AS hourly_process_counts
+           GROUP BY hour
+           ORDER BY hour ASC`,
+          [], // params
+          10000 // 10 second timeout
+        );
+        return await processTimeSeriesResults(result, hours);
+      } catch (err) {
+        _logger('Error using time_received column: %s', err.message);
+        // Continue to fallback methods
+      }
+    }
+    
+    // Check for existence of timestamp column
+    const timestampCheck = await query(
+      `SELECT column_name 
+       FROM information_schema.columns 
+       WHERE table_name = 'metrics_requests' 
+       AND column_name = 'timestamp'`
+    );
+    
+    if (timestampCheck.rows.length > 0) {
+      // Column exists, use it
       try {
         const result = await query(
           `SELECT 
@@ -322,40 +343,82 @@ export async function getTimeSeriesData(hours = 24) {
            ORDER BY hour ASC`,
           [], // params
           10000 // 10 second timeout
-        )
-        // If we got here, query succeeded
-        return await processTimeSeriesResults(result, hours)
-      } catch (secondErr) {
-        // If neither column works, throw the original error
-        _logger('Error querying with timestamp too: %s', secondErr.message)
-        throw err
+        );
+        return await processTimeSeriesResults(result, hours);
+      } catch (err) {
+        _logger('Error using timestamp column: %s', err.message);
+        // Continue to fallback methods
       }
     }
+    
+    // If we get here, neither column exists or both failed, fall back to a simpler query based on ID
+    _logger('Using simplified metrics query without time data');
+    try {
+      const result = await query(
+        `SELECT 
+           COUNT(*) as total_requests,
+           jsonb_object_agg(process_id, process_count) as process_counts
+         FROM (
+           SELECT 
+             process_id,
+             COUNT(*) as process_count
+           FROM metrics_requests
+           GROUP BY process_id
+           ORDER BY process_count DESC
+         ) AS process_counts`,
+        [], // params
+        10000 // 10 second timeout
+      );
+      
+      // Generate time series data using just the totals
+      const timeSeriesData = [];
+      const now = new Date();
+      const totalRequests = parseInt(result.rows[0]?.total_requests || 0, 10);
+      const processCounts = result.rows[0]?.process_counts || {};
+      
+      // Create empty buckets for each hour
+      for (let i = hours - 1; i >= 0; i--) {
+        const bucketTime = new Date(now.getTime() - i * 60 * 60 * 1000);
+        timeSeriesData.push({
+          timestamp: bucketTime.toISOString(),
+          hour: bucketTime.getUTCHours(),
+          totalRequests: i === 0 ? totalRequests : 0, // Put all data in the most recent bucket
+          processCounts: i === 0 ? processCounts : {}
+        });
+      }
+      
+      // Return the generated time series data
+      return {
+        timeSeriesData,
+        timeLabels: timeSeriesData.map(d => 
+          new Date(d.timestamp).getUTCHours().toString().padStart(2, '0') + ':00'
+        )
+      };
+    } catch (innerErr) {
+      _logger('Error with simplified query: %s', innerErr.message);
+      throw innerErr; // Bubble up to outer catch
+    }
   } catch (error) {
-    _logger('Error getting time series data: %O', error)
+    _logger('Error getting time series data: %O', error);
     // Generate empty time series data
-    const timeLabels = []
-    const timeSeriesData = []
-    const now = new Date()
+    const timeLabels = [];
+    const timeSeriesData = [];
+    const now = new Date();
     
     for (let i = hours - 1; i >= 0; i--) {
-      const date = new Date(now.getTime() - i * 60 * 60 * 1000)
-      timeLabels.push(date.getUTCHours().toString().padStart(2, '0') + ':00')
+      const date = new Date(now.getTime() - i * 60 * 60 * 1000);
+      timeLabels.push(date.getUTCHours().toString().padStart(2, '0') + ':00');
       
-      const bucketTime = new Date(now.getTime() - i * 60 * 60 * 1000)
+      const bucketTime = new Date(now.getTime() - i * 60 * 60 * 1000);
       timeSeriesData.push({
         timestamp: bucketTime.toISOString(),
         hour: bucketTime.getUTCHours(),
         totalRequests: 0,
         processCounts: {}
-      })
+      });
     }
     
-    return {
-      timeSeriesData,
-      timeLabels,
-      topProcessIds: []
-    }
+    return { timeSeriesData, timeLabels };
   }
 }
 

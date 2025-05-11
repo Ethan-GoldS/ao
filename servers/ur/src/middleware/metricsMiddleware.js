@@ -58,55 +58,11 @@ export function metricsMiddleware() {
         timestamp: new Date().toISOString()
       });
       
-      // The trick: For POST and PUT requests, we want to capture the body
-      // but without disrupting the proxy functionality
-      if ((req.method === 'POST' || req.method === 'PUT') && 
-          req.headers['content-type'] && 
-          req.headers['content-type'].includes('application/json')) {
-          
-        // Create a buffer to collect chunks of the request body
-        const chunks = [];
-        
-        // Listen to data events to collect body chunks without consuming the stream
-        req.on('data', chunk => {
-          chunks.push(chunk);
-        });
-        
-        // When the entire body has been received
-        req.on('end', () => {
-          try {
-            // Convert the buffer to a string
-            const bodyString = Buffer.concat(chunks).toString();
-            
-            // Try to parse as JSON
-            try {
-              capturedBody = JSON.parse(bodyString);
-              
-              // Update metrics with the captured body asynchronously
-              // This won't block the request processing
-              if (capturedBody) {
-                _logger('Successfully captured request body for metrics: %s', processId);
-                
-                // Store the captured body in our metrics system
-                recordRequestDetails({
-                  processId,
-                  timestamp: new Date().toISOString(),
-                  requestBody: bodyString,
-                  rawBody: JSON.stringify({
-                    ...JSON.parse(rawRequestData),
-                    body: capturedBody
-                  })
-                });
-              }
-            } catch (jsonErr) {
-              _logger('Could not parse request body as JSON: %s', jsonErr.message);
-              capturedBody = bodyString;
-            }
-          } catch (bodyErr) {
-            _logger('Error processing request body: %s', bodyErr.message);
-          }
-        });
-      }
+      // REMOVED: Previous approach interfered with the request stream needed by the proxy
+      // Instead we'll capture the body in the response end handler which is safer
+      
+      // We'll set a flag to indicate we want to try to capture the body later
+      req._captureBodyForMetrics = true;
     } catch (err) {
       _logger('Error capturing raw request data: %O', err);
     }
@@ -149,21 +105,37 @@ export function metricsMiddleware() {
         let action = null;
         let responseData = null;
         let responseRaw = null;
+        let requestBodyData = null;
         
-        // Try to capture and parse response body
+        // Extract the request body from the response, since the request body may contain important metadata
+        // that we couldn't safely capture earlier without breaking the proxy
         if (args[0] && typeof args[0] === 'string') {
           // Store the raw response text
           responseRaw = args[0];
-          
+
           try {
-            // Try to parse as JSON
+            // Try to parse the response as JSON
             responseData = JSON.parse(args[0]);
+
+            // Extract request body from the response if this is a dry-run request
+            // The requestBody is often echoed in the response
+            if (responseData && req.path && req.path.includes('dry-run')) {
+              // Try to extract request body data
+              if (responseData.Input && responseData.Input.Data) {
+                requestBodyData = responseData.Input.Data;
+              } else if (responseData.Body || responseData.body) {
+                requestBodyData = responseData.Body || responseData.body;
+              } else if (responseData.Tags && Array.isArray(responseData.Tags)) {
+                // If response has Tags directly, this is likely the request echoed back
+                requestBodyData = responseData;
+              }
+            }
             
             // Look for Action tag in various locations
             if (responseData.Tags) {
               const actionTag = responseData.Tags.find(tag => 
-                tag.name === 'Action' || tag.Name === 'Action' || 
-                tag.value === 'Action' || tag.Value === 'Action'
+                (tag.name === 'Action' || tag.Name === 'Action') ||
+                (tag.name?.toLowerCase() === 'action' || tag.Name?.toLowerCase() === 'action')
               );
               if (actionTag) {
                 action = actionTag.value || actionTag.Value;
@@ -176,7 +148,8 @@ export function metricsMiddleware() {
               const firstMsg = responseData.Messages[0];
               if (firstMsg && firstMsg.Tags) {
                 const msgActionTag = firstMsg.Tags.find(tag => 
-                  tag.name === 'Action' || tag.Name === 'Action'
+                  tag.name === 'Action' || tag.Name === 'Action' ||
+                  tag.name?.toLowerCase() === 'action' || tag.Name?.toLowerCase() === 'action'
                 );
                 if (msgActionTag) {
                   action = msgActionTag.value || msgActionTag.Value;
@@ -207,6 +180,19 @@ export function metricsMiddleware() {
           }
         }
         
+        // Create an enhanced raw request data object
+        let enhancedRawData = tracking.rawBody;
+        if (requestBodyData) {
+          try {
+            // Add the extracted request body to our raw data
+            const rawDataObj = JSON.parse(rawRequestData);
+            rawDataObj.body = requestBodyData;
+            enhancedRawData = JSON.stringify(rawDataObj);
+          } catch (e) {
+            _logger('Error enhancing raw request data: %s', e.message);
+          }
+        }
+        
         // Create a comprehensive metadata record with everything we know
         const metadataRecord = {
           ...tracking,
@@ -228,6 +214,10 @@ export function metricsMiddleware() {
               headers: res._headers || {}
             }
           },
+          // Add our enhanced raw data
+          rawBody: enhancedRawData,
+          // Add the full request body if we extracted it
+          requestBody: requestBodyData ? JSON.stringify(requestBodyData) : undefined,
           // Add the response body if we have it
           responseBody: responseRaw
         };
