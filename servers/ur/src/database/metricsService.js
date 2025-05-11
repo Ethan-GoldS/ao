@@ -227,16 +227,16 @@ export async function getTimeSeriesData(hours = 24) {
   try {
     const result = await query(
       `SELECT 
-         date_trunc('hour', timestamp) as hour,
+         date_trunc('hour', time_received) as hour,
          COUNT(*) as total_requests,
          jsonb_object_agg(process_id, process_count) as process_counts
        FROM (
          SELECT 
-           date_trunc('hour', timestamp) as hour,
+           date_trunc('hour', time_received) as hour,
            process_id,
            COUNT(*) as process_count
          FROM metrics_requests
-         WHERE timestamp > NOW() - interval '${hours} hours'
+         WHERE time_received > NOW() - interval '${hours} hours'
          GROUP BY hour, process_id
          ORDER BY hour, process_count DESC
        ) AS hourly_process_counts
@@ -250,7 +250,7 @@ export async function getTimeSeriesData(hours = 24) {
          process_id,
          COUNT(*) as request_count
        FROM metrics_requests
-       WHERE timestamp > NOW() - interval '${hours} hours'
+       WHERE time_received > NOW() - interval '${hours} hours'
        GROUP BY process_id
        ORDER BY request_count DESC
        LIMIT 5`

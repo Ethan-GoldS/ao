@@ -74,7 +74,6 @@ export async function initializeDatabase() {
     await query(`
       CREATE TABLE IF NOT EXISTS metrics_requests (
         id SERIAL PRIMARY KEY,
-        timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         process_id TEXT NOT NULL,
         request_ip TEXT,
         request_referrer TEXT,
@@ -86,7 +85,7 @@ export async function initializeDatabase() {
         request_body JSONB,
         action TEXT,
         duration INTEGER,
-        time_received TIMESTAMPTZ,
+        time_received TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         time_completed TIMESTAMPTZ
       )
     `)
@@ -97,7 +96,7 @@ export async function initializeDatabase() {
     `)
     
     await query(`
-      CREATE INDEX IF NOT EXISTS idx_metrics_timestamp ON metrics_requests(timestamp)
+      CREATE INDEX IF NOT EXISTS idx_metrics_time_received ON metrics_requests(time_received)
     `)
     
     await query(`
