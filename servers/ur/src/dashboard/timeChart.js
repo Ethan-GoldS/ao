@@ -89,12 +89,60 @@ export function getTimeChartScript(rawTimeData) {
     // Store the raw time series data for flexible filtering
     const rawTimeData = ${JSON.stringify(rawTimeData)};
     
+    // DEBUG: Log the raw timestamps before conversion
+    console.log('Raw timestamps from data:');
+    rawTimeData.slice(0, 5).forEach(function(bucket, i) {
+      console.log('Raw timestamp [' + i + ']:', bucket.timestamp, typeof bucket.timestamp);
+    });
+    
+    // DEBUG: Look at all the raw timestamps to check for patterns
+    console.log('All timestamps in raw data:');
+    const allTimestamps = rawTimeData.map(item => item.timestamp);
+    console.log(allTimestamps);
+    
     // Convert the raw data into a more usable format with actual Date objects
-    const timeSeriesDataPoints = rawTimeData.map(bucket => ({
-      timestamp: new Date(bucket.timestamp),
-      requests: bucket.totalRequests,
-      processCounts: bucket.processCounts
-    }));
+    const timeSeriesDataPoints = rawTimeData.map(bucket => {
+      // Check for invalid timestamps
+      if (!bucket.timestamp) {
+        console.error('Found bucket with no timestamp:', bucket);
+        return {
+          timestamp: new Date(), // Default to now
+          requests: bucket.totalRequests || 0,
+          processCounts: bucket.processCounts || {}
+        };
+      }
+      
+      // Create a new Date object and log it for debugging
+      const dateObj = new Date(bucket.timestamp);
+      return {
+        timestamp: dateObj,
+        requests: bucket.totalRequests,
+        processCounts: bucket.processCounts
+      };
+    });
+    
+    // DEBUG: Log the first few converted timestamps
+    console.log('First 5 converted timestamps:');
+    timeSeriesDataPoints.slice(0, 5).forEach(function(point, i) {
+      console.log('Converted [' + i + '] to:', point.timestamp.toISOString(), point.timestamp.toLocaleString());
+    });
+    
+    // Check for timestamp clustering - this might explain why data is stacked at one time
+    const uniqueDates = {};
+    timeSeriesDataPoints.forEach(function(point) {
+      const dateStr = point.timestamp.toLocaleDateString();
+      const hourStr = point.timestamp.getHours();
+      const key = dateStr + '-' + hourStr;
+      
+      if (!uniqueDates[key]) {
+        uniqueDates[key] = 1;
+      } else {
+        uniqueDates[key]++;
+      }
+    });
+    
+    console.log('Timestamp distribution by date and hour:');
+    console.log(uniqueDates);
     
     // Initialize time chart
     const timeCtx = document.getElementById('timeSeriesChart').getContext('2d');
@@ -281,6 +329,38 @@ export function getTimeChartScript(rawTimeData) {
       
       // For very small datasets, we might want to just return the raw data
       // But for consistency, we'll apply grouping in all cases
+      
+      // DETAILED DATA ANALYSIS DIAGNOSTICS
+      console.log('\n--- DETAILED TIMESTAMP DIAGNOSTICS ---');
+      
+      if (sortedData.length > 0) {
+        console.log('Total data points:', sortedData.length);
+        console.log('First timestamp:', sortedData[0].timestamp.toLocaleString());
+        console.log('Last timestamp:', sortedData[sortedData.length-1].timestamp.toLocaleString());
+        
+        // Check if all timestamps are exactly the same
+        const allSameTimestamp = sortedData.every(d => 
+          d.timestamp.getTime() === sortedData[0].timestamp.getTime());
+        console.log('All timestamps identical?', allSameTimestamp);
+        
+        // Check timestamp distribution
+        const timestampCounts = {};
+        sortedData.forEach(d => {
+          const timeKey = d.timestamp.toLocaleString();
+          timestampCounts[timeKey] = (timestampCounts[timeKey] || 0) + 1;
+        });
+        
+        console.log('Number of unique timestamps:', Object.keys(timestampCounts).length);
+        console.log('Top 5 most common timestamps:');
+        
+        Object.entries(timestampCounts)
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 5)
+          .forEach(([timestamp, count], i) => {
+            console.log(`  ${i+1}. ${timestamp}: ${count} occurrences`);
+          });
+      }
+      console.log('--- END DIAGNOSTICS ---\n');
       
       // Create buckets for each time interval in the range
       const result = [];
