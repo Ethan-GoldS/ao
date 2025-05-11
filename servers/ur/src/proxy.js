@@ -5,14 +5,12 @@ import { always, compose } from 'ramda'
  * was created with the fix
  */
 import httpProxy from 'http-proxy-node16'
-import https from 'https'
 
 /**
  * TODO: we could inject these, but just keeping simple for now
  */
 import { determineHostWith, bailoutWith } from './domain.js'
 import { logger } from './logger.js'
-import { metricsService } from './metrics.js'
 
 import { mountRoutesWithByAoUnit } from './routes/byAoUnit.js'
 
@@ -20,33 +18,12 @@ export function proxyWith ({ aoUnit, hosts, surUrl, processToHost, ownerToHost }
   const _logger = logger.child('proxy')
   _logger('Configuring to reverse proxy ao %s units...', aoUnit)
 
-  /**
-   * Default HTTPS agent with secure settings
-   */
-  const httpsAgent = new https.Agent({
-    keepAlive: true,
-    rejectUnauthorized: true // Verify SSL certificates
-  })
-
-  /**
-   * Create proxy server with default settings
-   * Let the library handle most decisions by default
-   */
-  const proxy = httpProxy.createProxyServer()
-  
-  // Handle proxy errors at the global level to ensure no unhandled errors
-  proxy.on('error', (err, req, res) => {
-    _logger('Global proxy error: %s', err.message)
-    // Only send a response if none has been sent yet
-    if (!res.headersSent && !res.writableEnded) {
-      res.writeHead(502, { 'Content-Type': 'application/json' })
-      res.end(JSON.stringify({ error: 'Proxy error', message: err.message || 'Unknown error' }))
-    }
-  })
-  
-  // Listen for successful responses to capture metrics
-  proxy.on('proxyRes', (proxyRes, req, res) => {
-    _logger('Received response from target with status: %d', proxyRes.statusCode)
+  // Configure proxy with TLS verification for secure connections to external servers
+  const proxy = httpProxy.createProxyServer({
+    // Enable proper SSL/TLS verification
+    secure: true,
+    // Handle certificate verification errors appropriately
+    changeOrigin: true
   })
 
   const bailout = aoUnit === 'cu' ? bailoutWith({ fetch, surUrl, processToHost, ownerToHost }) : undefined
@@ -104,13 +81,11 @@ export function proxyWith ({ aoUnit, hosts, surUrl, processToHost, ownerToHost }
            * on the proxied request.
            *
            * If not needed, then this is simply set to undefined, which uses the unconsumed
-           * request stream from the original request object
+           * request stream fro the original request object
            *
            * See buffer option on https://www.npmjs.com/package/http-proxy#options
            */
-          // For the proxy to work correctly, avoid buffering the request
-          // Let http-proxy handle the streaming directly
-          const buffer = undefined;
+          const buffer = restreamBody ? await restreamBody(req) : undefined
 
           const host = await determineHost({ processId, failoverAttempt })
 
@@ -124,116 +99,23 @@ export function proxyWith ({ aoUnit, hosts, surUrl, processToHost, ownerToHost }
             }
 
             _logger('Reverse Proxying process %s to host %s', processId, host)
-            
-            // Record start time for metrics
-            const requestStartTime = Date.now()
-            
-            // Create metrics data object
-            const metricsData = {
-              method: req.method,
-              path: req.path || req.url,
-              endpoint: req.method + ' ' + (req.path || req.url),
-              processId: processId,
-              query: req.query,
-              timestamp: requestStartTime
-            }
-            
             /**
-             * Configure proxy options with only essential settings
-             * Using a fresh options object per request to avoid cross-contamination
+             * Reverse proxy the request to the underlying selected host.
+             * If an error occurs, return the next iteration for our trampoline to invoke.
              */
-            const proxyOptions = {
-              target: host,
-              changeOrigin: true,
-              xfwd: true,
-              // Preserve host headers and SSL settings
-              secure: true,
-              // Don't buffer to avoid stream issues
-              buffer: undefined
-            }
-            
-            // Add agent only for HTTPS to handle SSL correctly
-            if (host.startsWith('https://')) {
-              proxyOptions.agent = httpsAgent
-              _logger('Using HTTPS settings for %s', host)
-            }
-            
-            // Extract tags and action data from request body if available
-            if (req.body) {
-              try {
-                if (req.body.Id) metricsData.body = { id: req.body.Id, target: req.body.Target, owner: req.body.Owner }
-                
-                if (Array.isArray(req.body.Tags)) {
-                  const actionTag = req.body.Tags.find(tag => tag.name === 'Action')
-                  const addressTag = req.body.Tags.find(tag => tag.name === 'Address')
-                  
-                  if (actionTag) {
-                    metricsData.action = actionTag.value
-                  }
-                  
-                  if (addressTag) {
-                    metricsData.address = addressTag.value
-                  }
-                }
-              } catch (bodyErr) {
-                _logger('Error parsing request body for metrics:', bodyErr)
-              }
-            }
-            
-            /**
-             * Direct proxy with minimal intervention
-             * Let http-proxy do all the stream handling directly
-             */
-            try {
-              // Set up success handler
-              const onProxyComplete = function(e) {
-                const responseTime = Date.now() - requestStartTime
-                
-                // Record metrics for success
-                metricsService.recordRequest({
-                  ...metricsData,
-                  statusCode: res.statusCode || 200,
-                  responseTime: responseTime
-                })
-                
-                // Clean up event listener - only need it once
-                proxy.removeListener('proxyRes', onProxyComplete)
-                
-                // Successfully completed proxy request
-                resolve()
-              }
-              
-              // Set up error handler
-              const onProxyError = function(err) {
-                const responseTime = Date.now() - requestStartTime
-                
-                _logger('Proxy error for %s: %s', processId, err.message)
-                
-                // Record metrics for error
-                metricsService.recordRequest({
-                  ...metricsData,
-                  error: err.message,
-                  statusCode: 502,
-                  responseTime: responseTime
-                })
-                
-                // Clean up event listener
-                proxy.removeListener('error', onProxyError)
-                
-                // Try next host in failover chain
-                resolve(() => revProxy({ failoverAttempt: failoverAttempt + 1, err }))
-              }
-              
-              // Add one-time listeners specifically for this request
-              proxy.once('proxyRes', onProxyComplete)
-              proxy.once('error', onProxyError)
-              
-              // Forward the request
-              proxy.web(req, res, proxyOptions)
-            } catch (err) {
-              _logger('Unexpected proxy error: %s', err.message)
-              reject(err)
-            }
+            proxy.web(req, res, { target: host, buffer }, (err) => {
+              /**
+               * No error occurred, so we're done
+               */
+              if (!err) return resolve()
+
+              /**
+               * Return the thunk for our next iteration, incrementing our failoverAttempt,
+               * so the next host in the list will be used
+               */
+              _logger('Error occurred for host %s and process %s', host, processId, err)
+              return resolve(() => revProxy({ failoverAttempt: failoverAttempt + 1, err }))
+            })
           })
         }
 
