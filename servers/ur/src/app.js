@@ -20,9 +20,8 @@ const middlewareWith = middlewareWithByStrategy[config.strategy]
 pipe(
   (app) => app.use(cors()),
   (app) => {
-    // Add Express JSON body parser for metrics tracking
-    app.use(express.json({ strict: false, limit: '1mb' }))
     // Add metrics middleware (doesn't affect core functionality)
+    // DO NOT parse body here - it breaks proxy functionality
     app.use(metricsMiddleware())
     return app
   },
