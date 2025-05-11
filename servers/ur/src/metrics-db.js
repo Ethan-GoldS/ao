@@ -162,78 +162,108 @@ export async function recordRequest(requestData) {
   } = requestData
   
   try {
-    // Begin transaction for data consistency
-    await db.exec('BEGIN TRANSACTION')
+    // Use a mutex-style approach for transaction safety
+    let transactionStarted = false;
+    let requestId = null;
     
-    // Convert timestamp to Unix timestamp for easier querying
-    const unixTimestamp = new Date(timestamp).getTime()
-    
-    // Insert request record
-    const result = await db.run(
-      `INSERT INTO requests 
-        (timestamp, process_id, ip, action, duration, unix_timestamp)
-       VALUES 
-        (?, ?, ?, ?, ?, ?)`,
-      [timestamp, processId, ip, action, duration, unixTimestamp]
-    )
-    
-    const requestId = result.lastID
-    
-    // Update processes table
-    if (processId) {
-      await db.run(`
-        INSERT INTO processes (process_id, first_seen, last_seen, total_requests, avg_duration)
-        VALUES (?, ?, ?, 1, ?)
-        ON CONFLICT (process_id) DO UPDATE SET
-          last_seen = ?,
-          total_requests = total_requests + 1,
-          avg_duration = ((avg_duration * total_requests) + ?) / (total_requests + 1)
-      `, [processId, timestamp, timestamp, duration, timestamp, duration])
-    }
-    
-    // Update IP addresses table
-    if (ip && ip !== 'unknown') {
-      await db.run(`
-        INSERT INTO ip_addresses (ip, first_seen, last_seen, total_requests)
-        VALUES (?, ?, ?, 1)
-        ON CONFLICT (ip) DO UPDATE SET
-          last_seen = ?,
-          total_requests = total_requests + 1
-      `, [ip, timestamp, timestamp, timestamp])
-    }
-    
-    // Update actions table
-    if (action) {
-      await db.run(`
-        INSERT INTO actions (action, first_seen, last_seen, total_requests, avg_duration)
-        VALUES (?, ?, ?, 1, ?)
-        ON CONFLICT (action) DO UPDATE SET
-          last_seen = ?,
-          total_requests = total_requests + 1,
-          avg_duration = ((avg_duration * total_requests) + ?) / (total_requests + 1)
-      `, [action, timestamp, timestamp, duration, timestamp, duration])
-    }
-    
-    // Insert any additional details
-    if (details && Object.keys(details).length > 0) {
-      const stmt = await db.prepare(`
-        INSERT INTO request_details (request_id, key, value) VALUES (?, ?, ?)
-      `)
+    try {
+      // Begin transaction for data consistency
+      await db.exec('BEGIN IMMEDIATE TRANSACTION');
+      transactionStarted = true;
       
-      for (const [key, value] of Object.entries(details)) {
-        await stmt.run(requestId, key, typeof value === 'object' ? JSON.stringify(value) : String(value))
+      // Convert timestamp to Unix timestamp for easier querying
+      const unixTimestamp = new Date(timestamp).getTime();
+      
+      // Insert request record
+      const result = await db.run(
+        `INSERT INTO requests 
+          (timestamp, process_id, ip, action, duration, unix_timestamp)
+         VALUES 
+          (?, ?, ?, ?, ?, ?)`,
+        [timestamp, processId, ip, action, duration, unixTimestamp]
+      );
+      
+      requestId = result.lastID;
+      
+      // Update processes table
+      if (processId) {
+        await db.run(`
+          INSERT INTO processes (process_id, first_seen, last_seen, total_requests, avg_duration)
+          VALUES (?, ?, ?, 1, ?)
+          ON CONFLICT (process_id) DO UPDATE SET
+            last_seen = ?,
+            total_requests = total_requests + 1,
+            avg_duration = ((avg_duration * total_requests) + ?) / (total_requests + 1)
+        `, [processId, timestamp, timestamp, duration, timestamp, duration]);
       }
       
-      await stmt.finalize()
+      // Update IP addresses table
+      if (ip && ip !== 'unknown') {
+        await db.run(`
+          INSERT INTO ip_addresses (ip, first_seen, last_seen, total_requests)
+          VALUES (?, ?, ?, 1)
+          ON CONFLICT (ip) DO UPDATE SET
+            last_seen = ?,
+            total_requests = total_requests + 1
+        `, [ip, timestamp, timestamp, timestamp]);
+      }
+      
+      // Update actions table
+      if (action) {
+        await db.run(`
+          INSERT INTO actions (action, first_seen, last_seen, total_requests, avg_duration)
+          VALUES (?, ?, ?, 1, ?)
+          ON CONFLICT (action) DO UPDATE SET
+            last_seen = ?,
+            total_requests = total_requests + 1,
+            avg_duration = ((avg_duration * total_requests) + ?) / (total_requests + 1)
+        `, [action, timestamp, timestamp, duration, timestamp, duration]);
+      }
+      
+      // Insert any additional details
+      if (details && Object.keys(details).length > 0) {
+        const stmt = await db.prepare(`
+          INSERT INTO request_details (request_id, key, value) VALUES (?, ?, ?)
+        `);
+        
+        for (const [key, value] of Object.entries(details)) {
+          // Skip undefined or null values
+          if (value === undefined || value === null) continue;
+          
+          // Convert objects to JSON strings and ensure other values are converted to strings
+          const valueString = typeof value === 'object' 
+            ? JSON.stringify(value).substring(0, 1000) // Limit object size
+            : String(value).substring(0, 1000); // Limit string size
+          
+          await stmt.run(requestId, key, valueString);
+        }
+        
+        await stmt.finalize();
+      }
+      
+      // Commit the transaction
+      await db.exec('COMMIT');
+      transactionStarted = false;
+      
+      _logger('Recorded request metrics for %s', processId || 'unknown process');
+      return requestId;
+    } catch (innerErr) {
+      // Only try to rollback if we successfully started a transaction
+      if (transactionStarted) {
+        try {
+          await db.exec('ROLLBACK');
+        } catch (rollbackErr) {
+          // Ignore rollback errors, but log them
+          _logger('Error during transaction rollback: %O', rollbackErr);
+        }
+      }
+      
+      // Re-throw the original error
+      throw innerErr;
     }
-    
-    await db.exec('COMMIT')
-    _logger('Recorded request metrics for %s', processId || 'unknown process')
-    return requestId
   } catch (err) {
-    await db.exec('ROLLBACK')
-    _logger('Error recording request metrics: %O', err)
-    return null
+    _logger('Error recording request metrics: %O', err);
+    return null;
   }
 }
 
