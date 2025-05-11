@@ -27,17 +27,13 @@ export function proxyWith ({ aoUnit, hosts, surUrl, processToHost, ownerToHost }
     timeout: 15000 // 15 second socket timeout
   })
 
-  // Create a very simple proxy server with minimal options
+  // Create a simple proxy server with minimal options
   const proxy = httpProxy.createProxyServer({
-    // Core options needed for HTTPS proxying
     secure: true,
     changeOrigin: true,
     xfwd: true,
     followRedirects: true,
-    // Set reasonable timeouts
-    proxyTimeout: 30000,
-    // Use our secure agent for HTTPS connections
-    agent: httpsAgent
+    proxyTimeout: 30000
   })
   
   // Handle proxy errors at the global level
@@ -90,7 +86,7 @@ export function proxyWith ({ aoUnit, hosts, surUrl, processToHost, ownerToHost }
    * If the failoverAttempts for a request are exhausted, then simply bubble the error
    * in the response.
    */
-  const withRevProxyHandler = ({ processIdFromRequest, restreamBody }) => {
+  const withRevProxyHandler = ({ processIdFromRequest }) => {
     return compose(
       withErrorHandler,
       always(async (req, res) => {
@@ -99,119 +95,85 @@ export function proxyWith ({ aoUnit, hosts, surUrl, processToHost, ownerToHost }
         if (!processId) return res.status(404).send({ error: 'Process id not found on request' })
 
         async function revProxy ({ failoverAttempt, err }) {
-          /**
-           * In cases where we have to consume the request stream before proxying
-           * it, we allow passing a restreamBody to get a fresh stream to send along
-           * on the proxied request.
-           *
-           * If not needed, then this is simply set to undefined, which uses the unconsumed
-           * request stream from the original request object
-           *
-           * See buffer option on https://www.npmjs.com/package/http-proxy#options
-           */
-          // For the proxy to work correctly, avoid buffering the request
-          // Let http-proxy handle the streaming directly
-          const buffer = undefined;
-
+          // Determine target host with failover support
           const host = await determineHost({ processId, failoverAttempt })
 
           return new Promise((resolve, reject) => {
-            /**
-             * There are no more hosts to failover to -- we've tried them all
-             */
+            // Check if we've exhausted all hosts
             if (!host) {
-              _logger('Exhausted all failover attempts for process %s. Bubbling final error', processId, err)
-              return reject(err)
+              _logger('Exhausted all failover attempts for process %s', processId)
+              return reject(err || new Error('No available hosts'))
             }
 
-            _logger('Reverse Proxying process %s to host %s', processId, host)
-            /**
-             * Reverse proxy the request to the underlying selected host.
-             * If an error occurs, return the next iteration for our trampoline to invoke.
-             */
-            // Use minimal proxy options to avoid complications
+            // Log the proxy attempt
+            _logger('Proxying to %s for process %s', host, processId)
+
+            // Setup proxy options - keep it simple
             const proxyOptions = { 
               target: host,
               secure: true
             }
-            
-            // For HTTPS targets, ensure we're using proper TLS
+
+            // Apply HTTPS agent for secure connections
             if (host.startsWith('https://')) {
               proxyOptions.agent = httpsAgent
-              _logger('Using secure HTTPS options for proxying to %s', host)
             }
-            
-            // Record start time for metrics
+
+            // Start time for metrics
             const startTime = Date.now()
-            
-            // Create metrics data object
+
+            // Prepare metrics data object
             const metricsData = {
+              processId,
               method: req.method,
               path: req.path || req.url,
-              endpoint: req.method + ' ' + (req.path || req.url),
-              processId: processId,
-              query: req.query,
-              timestamp: requestStartTime,
+              host
             }
-            
-            // Extract tags and action data from request body if available
-            if (req.body) {
+
+            // Extract request details for metrics
+            if (req.body && req.body.Tags) {
               try {
-                if (req.body.Id) metricsData.body = { id: req.body.Id, target: req.body.Target, owner: req.body.Owner }
-                
-                if (Array.isArray(req.body.Tags)) {
-                  const actionTag = req.body.Tags.find(tag => tag.name === 'Action')
-                  const addressTag = req.body.Tags.find(tag => tag.name === 'Address')
-                  
-                  if (actionTag) {
-                    metricsData.action = actionTag.value
-                  }
-                  
-                  if (addressTag) {
-                    metricsData.address = addressTag.value
-                  }
-                }
-              } catch (bodyErr) {
-                _logger('Error parsing request body for metrics:', bodyErr)
+                const actionTag = req.body.Tags.find(t => t.name === 'Action')
+                if (actionTag) metricsData.action = actionTag.value
+              } catch (e) {
+                // Ignore parsing errors
               }
             }
-            
-            // Record start time for metrics (MUST be defined here for proper scope)
-            const requestStartTime = Date.now()
-            
-            // Execute the proxy request with error handling
+
+            // Execute the proxy request
             proxy.web(req, res, proxyOptions, (err) => {
-              const responseTime = Date.now() - requestStartTime
-              
+              // Calculate response time
+              const responseTime = Date.now() - startTime
+
               if (err) {
-                _logger('Proxy error for %s: %s', processId, err.message)
-                
-                // Record error in metrics
+                // Log error details
+                _logger('Proxy error: %s, code: %s', err.message, err.code || 'unknown')
+
+                // Record error metrics
                 metricsService.recordRequest({
-                  method: req.method,
-                  path: req.path || req.url,
-                  processId: processId,
+                  ...metricsData,
                   error: err.message,
                   statusCode: 502,
-                  responseTime: responseTime,
-                  timestamp: requestStartTime
+                  responseTime,
+                  timestamp: startTime
                 })
-                
-                // Try next host in failover chain
-                return resolve(() => revProxy({ failoverAttempt: failoverAttempt + 1, err }))
+
+                // Try next host
+                return resolve(() => revProxy({ 
+                  failoverAttempt: failoverAttempt + 1, 
+                  err 
+                }))
               }
-              
-              // Record successful request in metrics
+
+              // Record successful metrics
               metricsService.recordRequest({
-                method: req.method,
-                path: req.path || req.url,
-                processId: processId,
+                ...metricsData,
                 statusCode: res.statusCode || 200,
-                responseTime: responseTime,
-                timestamp: requestStartTime
+                responseTime,
+                timestamp: startTime
               })
-              
-              // Successfully completed proxy - resolve the promise
+
+              // Success - we're done
               return resolve()
             })
           })
