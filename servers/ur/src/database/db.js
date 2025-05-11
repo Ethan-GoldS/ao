@@ -70,44 +70,69 @@ export async function initializeDatabase() {
   try {
     _logger('Initializing database...')
     
-    // Create metrics table
-    await query(`
-      CREATE TABLE IF NOT EXISTS metrics_requests (
-        id SERIAL PRIMARY KEY,
-        process_id TEXT NOT NULL,
-        request_ip TEXT,
-        request_referrer TEXT,
-        request_method TEXT,
-        request_path TEXT,
-        request_user_agent TEXT,
-        request_origin TEXT,
-        request_content_type TEXT,
-        request_body JSONB,
-        action TEXT,
-        duration INTEGER,
-        time_received TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        time_completed TIMESTAMPTZ
-      )
-    `)
+    // Define a timeout for the initialization
+    const initTimeoutPromise = new Promise((_, reject) => {
+      setTimeout(() => {
+        reject(new Error('Database initialization timed out after 15 seconds'))
+      }, 15000) // 15 second timeout - consistent with other timeouts in the application
+    })
     
-    // Create index on process_id and timestamp for faster queries
-    await query(`
-      CREATE INDEX IF NOT EXISTS idx_metrics_process_id ON metrics_requests(process_id)
-    `)
+    // Database initialization with timeout
+    await Promise.race([
+      initDatabaseSchema(),
+      initTimeoutPromise
+    ])
     
-    await query(`
-      CREATE INDEX IF NOT EXISTS idx_metrics_time_received ON metrics_requests(time_received)
-    `)
-    
-    await query(`
-      CREATE INDEX IF NOT EXISTS idx_metrics_action ON metrics_requests(action)
-    `)
+    // Run migrations to fix any schema mismatches
+    const { runMigrations } = await import('./migration.js')
+    await runMigrations()
     
     _logger('Database initialization complete')
+    return true
   } catch (error) {
     _logger('Error initializing database: %O', error)
-    throw error
+    // Don't throw here - we want to continue even if DB setup fails
+    // The application should still work but metrics won't be stored
+    return false
   }
+}
+
+/**
+ * Initialize database schema with tables and indexes
+ */
+async function initDatabaseSchema() {
+  // Create metrics table
+  await query(`
+    CREATE TABLE IF NOT EXISTS metrics_requests (
+      id SERIAL PRIMARY KEY,
+      process_id TEXT NOT NULL,
+      request_ip TEXT,
+      request_referrer TEXT,
+      request_method TEXT,
+      request_path TEXT,
+      request_user_agent TEXT,
+      request_origin TEXT,
+      request_content_type TEXT,
+      request_body JSONB,
+      action TEXT,
+      duration INTEGER,
+      time_received TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      time_completed TIMESTAMPTZ
+    )
+  `)
+  
+  // Create indexes for faster queries
+  await query(`
+    CREATE INDEX IF NOT EXISTS idx_metrics_process_id ON metrics_requests(process_id)
+  `)
+  
+  await query(`
+    CREATE INDEX IF NOT EXISTS idx_metrics_time_received ON metrics_requests(time_received)
+  `)
+  
+  await query(`
+    CREATE INDEX IF NOT EXISTS idx_metrics_action ON metrics_requests(action)
+  `)
 }
 
 /**

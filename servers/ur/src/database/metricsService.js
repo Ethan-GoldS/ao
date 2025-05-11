@@ -225,32 +225,83 @@ export async function getClientMetrics() {
  */
 export async function getTimeSeriesData(hours = 24) {
   try {
-    const result = await query(
-      `SELECT 
-         date_trunc('hour', time_received) as hour,
-         COUNT(*) as total_requests,
-         jsonb_object_agg(process_id, process_count) as process_counts
-       FROM (
-         SELECT 
+    // First attempt to use time_received column
+    try {
+      const result = await query(
+        `SELECT 
            date_trunc('hour', time_received) as hour,
-           process_id,
-           COUNT(*) as process_count
-         FROM metrics_requests
-         WHERE time_received > NOW() - interval '${hours} hours'
-         GROUP BY hour, process_id
-         ORDER BY hour, process_count DESC
-       ) AS hourly_process_counts
-       GROUP BY hour
-       ORDER BY hour ASC`
-    )
+           COUNT(*) as total_requests,
+           jsonb_object_agg(process_id, process_count) as process_counts
+         FROM (
+           SELECT 
+             date_trunc('hour', time_received) as hour,
+             process_id,
+             COUNT(*) as process_count
+           FROM metrics_requests
+           WHERE time_received > NOW() - interval '${hours} hours'
+           GROUP BY hour, process_id
+           ORDER BY hour, process_count DESC
+         ) AS hourly_process_counts
+         GROUP BY hour
+         ORDER BY hour ASC`,
+        [], // params
+        10000 // 10 second timeout
+      )
+      // If we got here, query succeeded
+      return await processTimeSeriesResults(result, hours)
+    } catch (err) {
+      // If time_received column doesn't exist, try using timestamp instead
+      _logger('Error querying with time_received, trying timestamp: %s', err.message)
+      try {
+        const result = await query(
+          `SELECT 
+             date_trunc('hour', timestamp) as hour,
+             COUNT(*) as total_requests,
+             jsonb_object_agg(process_id, process_count) as process_counts
+           FROM (
+             SELECT 
+               date_trunc('hour', timestamp) as hour,
+               process_id,
+               COUNT(*) as process_count
+             FROM metrics_requests
+             WHERE timestamp > NOW() - interval '${hours} hours'
+             GROUP BY hour, process_id
+             ORDER BY hour, process_count DESC
+           ) AS hourly_process_counts
+           GROUP BY hour
+           ORDER BY hour ASC`,
+          [], // params
+          10000 // 10 second timeout
+        )
+        // If we got here, query succeeded
+        return await processTimeSeriesResults(result, hours)
+      } catch (secondErr) {
+        // If neither column works, throw the original error
+        _logger('Error querying with timestamp too: %s', secondErr.message)
+        throw err
+      }
+    }
+  } catch (error) {
+    _logger('Error getting time series data: %O', error)
+    // Provide fallback data
+    return generateFallbackTimeSeriesData(hours)
+  }
+}
 
+/**
+ * Process time series results into expected format
+ * @param {Object} result Query result
+ * @param {Number} hours Number of hours
+ * @returns {Promise<Object>} Processed time series data
+ */
+async function processTimeSeriesResults(result, hours) {
+  try {
     // Get the top process IDs overall
     const topProcessesResult = await query(
       `SELECT 
          process_id,
          COUNT(*) as request_count
        FROM metrics_requests
-       WHERE time_received > NOW() - interval '${hours} hours'
        GROUP BY process_id
        ORDER BY request_count DESC
        LIMIT 5`
@@ -300,8 +351,8 @@ export async function getTimeSeriesData(hours = 24) {
 
     return { timeSeriesData, timeLabels, topProcessIds }
   } catch (error) {
-    _logger('Error getting time series data: %O', error)
-    return { timeSeriesData: [], timeLabels: [], topProcessIds: [] }
+    _logger('Error processing time series results: %O', error)
+    return generateFallbackTimeSeriesData(hours)
   }
 }
 
