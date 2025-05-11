@@ -426,8 +426,14 @@ function refreshTimeSeriesData(upToTime) {
 // Refresh time series data every hour
 setInterval(refreshTimeSeriesData, TIME_BUCKET_SIZE_MS);
 
-// Save metrics to disk periodically if storage is enabled
-if (isPersistentStorageEnabled) {
+// Set up persistence based on configuration
+if (usePostgres && config.dbUrl) {
+  // When using PostgreSQL, data is saved in real-time with each operation
+  _logger('Using PostgreSQL for metrics storage - automatic persistence enabled');
+} else if (isPersistentStorageEnabled) {
+  // Only set up periodic file saves if PostgreSQL is not enabled
+  _logger('Using file-based metrics storage');
+  
   // Save immediately on startup
   setTimeout(() => {
     _logger('Performing initial metrics save...');
@@ -439,6 +445,8 @@ if (isPersistentStorageEnabled) {
   
   // Log the save interval for debugging
   _logger('Metrics will be saved every %d seconds to: %s', STORAGE_INTERVAL_MS / 1000, STORAGE_PATH);
+} else {
+  _logger('No persistent storage configured. Metrics will be kept in memory only.');
 }
 
 /**

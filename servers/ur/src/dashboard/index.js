@@ -48,23 +48,31 @@ export function generateDashboardHtml(metrics) {
   const actionMetricsTable = generateActionMetricsTable(metrics);
   const clientMetricsTable = generateClientMetricsTable(metrics);
   
+  // Helper to get count for IP and referrer data that could be arrays or objects 
+  const getCount = (data) => {
+    if (!data) return 0;
+    if (Array.isArray(data)) return data.length;
+    if (typeof data === 'object') return Object.keys(data).length;
+    return 0;
+  };
+  
   // Generate the overview stats
   const statsOverview = `
     <div class="stats-overview">
       <div class="stat-box">
-        <div class="stat-number">${metrics.totalRequests}</div>
+        <div class="stat-number">${metrics.totalRequests || 0}</div>
         <div class="stat-label">Total Requests</div>
       </div>
       <div class="stat-box">
-        <div class="stat-number">${Object.keys(metrics.processCounts).length}</div>
+        <div class="stat-number">${metrics.processCounts ? Object.keys(metrics.processCounts).length : 0}</div>
         <div class="stat-label">Unique Process IDs</div>
       </div>
       <div class="stat-box">
-        <div class="stat-number">${Object.keys(metrics.actionCounts).length}</div>
+        <div class="stat-number">${metrics.actionCounts ? Object.keys(metrics.actionCounts).length : 0}</div>
         <div class="stat-label">Different Actions</div>
       </div>
       <div class="stat-box">
-        <div class="stat-number">${metrics.ipCounts.length}</div>
+        <div class="stat-number">${getCount(metrics.ipCounts)}</div>
         <div class="stat-label">Unique IPs</div>
       </div>
     </div>
