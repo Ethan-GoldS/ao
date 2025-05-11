@@ -380,26 +380,26 @@ function generateDashboardHtml() {
       <h1>AO Router Metrics Dashboard</h1>
       <div class="timestamp">
         <span id="refresh-status">Auto-refreshes every 5 seconds</span> - 
-        Last updated: <span id="last-updated">${new Date().toISOString()}</span>
+        Last updated: <span id="last-updated">' + new Date().toISOString() + '</span>
         <button id="toggle-refresh" class="refresh-btn">Pause</button>
         <span id="loading-indicator">Loading...</span>
       </div>
       
       <div class="stats-overview">
         <div class="stat-box">
-          <div class="stat-number">${metrics.totalRequests}</div>
+          <div class="stat-number">' + metrics.totalRequests + '</div>
           <div class="stat-label">Total Requests</div>
         </div>
         <div class="stat-box">
-          <div class="stat-number">${Object.keys(metrics.processCounts).length}</div>
+          <div class="stat-number">' + Object.keys(metrics.processCounts).length + '</div>
           <div class="stat-label">Unique Process IDs</div>
         </div>
         <div class="stat-box">
-          <div class="stat-number">${Object.keys(metrics.actionCounts).length}</div>
+          <div class="stat-number">' + Object.keys(metrics.actionCounts).length + '</div>
           <div class="stat-label">Different Actions</div>
         </div>
         <div class="stat-box">
-          <div class="stat-number">{{metrics.ipCounts.length}}</div>
+          <div class="stat-number">' + Object.keys(metrics.ipCounts).length + '</div>
           <div class="stat-label">Unique IPs</div>
         </div>
       </div>
@@ -428,7 +428,7 @@ function generateDashboardHtml() {
             <div class="preset-buttons">
               <button class="time-preset" data-minutes="15">15m</button>
               <button class="time-preset" data-minutes="30">30m</button>
-              <button class="time-preset" data-hours="1">1h</button>
+              <button class="time-preset active" data-hours="1">1h</button>
               <button class="time-preset" data-hours="3">3h</button>
               <button class="time-preset" data-hours="6">6h</button>
               <button class="time-preset" data-hours="12">12h</button>
@@ -441,11 +441,11 @@ function generateDashboardHtml() {
           <div class="interval-selector">
             <h3>Time Interval</h3>
             <select id="time-interval">
-              <option value="minute">Minutes</option>
+              <option value="minute" selected>Minutes</option>
               <option value="5minute">5 Minutes</option>
               <option value="15minute">15 Minutes</option>
               <option value="30minute">30 Minutes</option>
-              <option value="hour" selected>Hours</option>
+              <option value="hour">Hours</option>
               <option value="day">Days</option>
             </select>
           </div>
@@ -479,7 +479,7 @@ function generateDashboardHtml() {
             </tr>
           </thead>
           <tbody>
-            ${recentRequestsHtml || '<tr><td colspan="6">No requests recorded yet</td></tr>'}
+            ' + (recentRequestsHtml || '<tr><td colspan="6">No requests recorded yet</td></tr>') + '
           </tbody>
         </table>
       </div>
@@ -498,7 +498,7 @@ function generateDashboardHtml() {
             </tr>
           </thead>
           <tbody>
-            ${processMetricsHtml || '<tr><td colspan="4">No process metrics recorded yet</td></tr>'}
+            ' + (processMetricsHtml || '<tr><td colspan="4">No process metrics recorded yet</td></tr>') + '
           </tbody>
         </table>
         <div class="chart-container">
@@ -520,7 +520,7 @@ function generateDashboardHtml() {
             </tr>
           </thead>
           <tbody>
-            ${actionMetricsHtml || '<tr><td colspan="3">No action metrics recorded yet</td></tr>'}
+            ' + (actionMetricsHtml || '<tr><td colspan="3">No action metrics recorded yet</td></tr>') + '
           </tbody>
         </table>
         <div class="chart-container">
@@ -540,7 +540,7 @@ function generateDashboardHtml() {
               </tr>
             </thead>
             <tbody>
-              ${ipMetricsHtml || '<tr><td colspan="2">No IP metrics recorded yet</td></tr>'}
+              ' + (ipMetricsHtml || '<tr><td colspan="2">No IP metrics recorded yet</td></tr>') + '
             </tbody>
           </table>
         </div>
@@ -555,7 +555,7 @@ function generateDashboardHtml() {
               </tr>
             </thead>
             <tbody>
-              ${referrerMetricsHtml || '<tr><td colspan="2">No referrer metrics recorded yet</td></tr>'}
+              ' + (referrerMetricsHtml || '<tr><td colspan="2">No referrer metrics recorded yet</td></tr>') + '
             </tbody>
           </table>
         </div>
@@ -563,30 +563,30 @@ function generateDashboardHtml() {
       
       <script>
         // Initial data from server - this will be refreshed via AJAX
-        let timeLabels = ${JSON.stringify(timeLabels)};
-        let timeSeriesData = ${JSON.stringify(timeSeriesData)};
+        let timeLabels = ' + JSON.stringify(timeLabels) + ';
+        let timeSeriesData = ' + JSON.stringify(timeSeriesData) + ';
         
         // Store all metrics data for AJAX updates
         let allMetricsData = {
-          recentRequests: ${JSON.stringify(metrics.recentRequests)},
-          processCounts: ${JSON.stringify(metrics.processCounts)},
-          actionCounts: ${JSON.stringify(metrics.actionCounts)},
-          processTiming: ${JSON.stringify(Object.entries(metrics.processTiming).reduce((acc, [processId, data]) => {
+          recentRequests: ' + JSON.stringify(metrics.recentRequests) + ',
+          processCounts: ' + JSON.stringify(metrics.processCounts) + ',
+          actionCounts: ' + JSON.stringify(metrics.actionCounts) + ',
+          processTiming: ' + JSON.stringify(Object.entries(metrics.processTiming).reduce((acc, [processId, data]) => {
             acc[processId] = {
               ...data,
               avgDuration: data.count > 0 ? data.totalDuration / data.count : 0
             };
             return acc;
-          }, {}))},
-          actionTiming: ${JSON.stringify(Object.entries(metrics.actionTiming).reduce((acc, [action, data]) => {
+          }, {})) + ',
+          actionTiming: ' + JSON.stringify(Object.entries(metrics.actionTiming).reduce((acc, [action, data]) => {
             acc[action] = {
               ...data,
               avgDuration: data.count > 0 ? data.totalDuration / data.count : 0
             };
             return acc;
-          }, {}))},
-          totalRequests: ${metrics.totalRequests || 0},
-          timeSeriesData: ${JSON.stringify(metrics.timeSeriesData)}
+          }, {})) + ',
+          totalRequests: ' + (metrics.totalRequests || 0) + ',
+          timeSeriesData: ' + JSON.stringify(metrics.timeSeriesData) + '
         };
         
         const timeCtx = document.getElementById('timeSeriesChart').getContext('2d');
@@ -771,9 +771,9 @@ function generateDashboardHtml() {
         
         // Current time range settings
         let currentTimeRange = {
-          start: new Date(Date.now() - 24 * 60 * 60 * 1000), // 24 hours ago
+          start: new Date(Date.now() - 60 * 60 * 1000), // 1 hour ago (default view)
           end: new Date(),
-          interval: 'hour' // Default interval
+          interval: 'minute' // Default interval for 1-hour view
         };
         
         // Initialize datetime pickers with current range
