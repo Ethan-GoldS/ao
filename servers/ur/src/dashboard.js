@@ -397,115 +397,155 @@ function generateDashboardHtml() {
         requestsTableBody.appendChild(row);
       });
       
-      // Update charts
-      updateCharts(metrics);
+      // Only update charts if we're on the overview tab
+      if (document.getElementById('overview').classList.contains('active')) {
+        updateCharts(metrics);
+      }
     }
     
     function updateCharts(metrics) {
-      // Prepare data for process chart
-      const processLabels = [];
-      const processCounts = [];
-      
-      Object.entries(metrics.processCounts)
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 10)
-        .forEach(([processId, count]) => {
-          processLabels.push(truncateString(processId, 8));
-          processCounts.push(count);
-        });
-      
-      // Prepare data for action chart
-      const actionLabels = [];
-      const actionCounts = [];
-      
-      Object.entries(metrics.actionCounts)
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 10)
-        .forEach(([action, count]) => {
-          actionLabels.push(action || 'Unknown');
-          actionCounts.push(count);
-        });
-      
-      // Create/update process chart
-      if (charts.processes) {
-        charts.processes.data.labels = processLabels;
-        charts.processes.data.datasets[0].data = processCounts;
-        charts.processes.update();
-      } else {
-        const ctx = document.getElementById('topProcessesChart').getContext('2d');
-        charts.processes = new Chart(ctx, {
-          type: 'bar',
-          data: {
-            labels: processLabels,
-            datasets: [{
-              label: 'Request Count',
-              data: processCounts,
-              backgroundColor: 'rgba(52, 152, 219, 0.6)',
-              borderColor: 'rgba(52, 152, 219, 1)',
-              borderWidth: 1
-            }]
-          },
-          options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            scales: {
-              y: {
-                beginAtZero: true,
-                title: {
-                  display: true,
-                  text: 'Number of Requests'
-                }
-              },
-              x: {
-                title: {
-                  display: true,
-                  text: 'Process ID'
-                }
+      try {
+        // Check if chart containers exist
+        const processChartElement = document.getElementById('topProcessesChart');
+        const actionChartElement = document.getElementById('topActionsChart');
+        
+        if (!processChartElement || !actionChartElement) {
+          console.warn('Chart containers not found in DOM');
+          return;
+        }
+        
+        // Ensure canvas elements exist and are properly created
+        if (!processChartElement.tagName || processChartElement.tagName.toLowerCase() !== 'canvas') {
+          processChartElement.innerHTML = '';
+          const canvas = document.createElement('canvas');
+          canvas.id = 'processChartCanvas';
+          processChartElement.appendChild(canvas);
+          processChartElement.canvas = canvas;
+        }
+        
+        if (!actionChartElement.tagName || actionChartElement.tagName.toLowerCase() !== 'canvas') {
+          actionChartElement.innerHTML = '';
+          const canvas = document.createElement('canvas');
+          canvas.id = 'actionChartCanvas';
+          actionChartElement.appendChild(canvas);
+          actionChartElement.canvas = canvas;
+        }
+        
+        // Prepare data for process chart
+        const processLabels = [];
+        const processCounts = [];
+        
+        Object.entries(metrics.processCounts)
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 10)
+          .forEach(([processId, count]) => {
+            processLabels.push(truncateString(processId, 8));
+            processCounts.push(count);
+          });
+        
+        // Prepare data for action chart
+        const actionLabels = [];
+        const actionCounts = [];
+        
+        Object.entries(metrics.actionCounts)
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 10)
+          .forEach(([action, count]) => {
+            actionLabels.push(action || 'Unknown');
+            actionCounts.push(count);
+          });
+        
+        // Get the chart contexts
+        const processCtx = processChartElement.canvas ? processChartElement.canvas.getContext('2d') : null;
+        const actionCtx = actionChartElement.canvas ? actionChartElement.canvas.getContext('2d') : null;
+        
+        if (!processCtx || !actionCtx) {
+          console.warn('Could not get chart contexts');
+          return;
+        }
+        
+        // Configure chart options
+        const chartOptions = {
+          responsive: true,
+          maintainAspectRatio: false,
+          scales: {
+            y: {
+              beginAtZero: true,
+              title: {
+                display: true,
+                text: 'Number of Requests'
               }
             }
           }
-        });
-      }
-      
-      // Create/update action chart
-      if (charts.actions) {
-        charts.actions.data.labels = actionLabels;
-        charts.actions.data.datasets[0].data = actionCounts;
-        charts.actions.update();
-      } else {
-        const ctx = document.getElementById('topActionsChart').getContext('2d');
-        charts.actions = new Chart(ctx, {
-          type: 'bar',
-          data: {
-            labels: actionLabels,
-            datasets: [{
-              label: 'Request Count',
-              data: actionCounts,
-              backgroundColor: 'rgba(46, 204, 113, 0.6)',
-              borderColor: 'rgba(46, 204, 113, 1)',
-              borderWidth: 1
-            }]
-          },
-          options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            scales: {
-              y: {
-                beginAtZero: true,
-                title: {
-                  display: true,
-                  text: 'Number of Requests'
-                }
-              },
-              x: {
-                title: {
-                  display: true,
-                  text: 'Action Type'
+        };
+        
+        // Create/update process chart
+        if (charts.processes) {
+          charts.processes.data.labels = processLabels;
+          charts.processes.data.datasets[0].data = processCounts;
+          charts.processes.update();
+        } else if (processCtx) {
+          charts.processes = new Chart(processCtx, {
+            type: 'bar',
+            data: {
+              labels: processLabels,
+              datasets: [{
+                label: 'Request Count',
+                data: processCounts,
+                backgroundColor: 'rgba(52, 152, 219, 0.6)',
+                borderColor: 'rgba(52, 152, 219, 1)',
+                borderWidth: 1
+              }]
+            },
+            options: {
+              ...chartOptions,
+              scales: {
+                ...chartOptions.scales,
+                x: {
+                  title: {
+                    display: true,
+                    text: 'Process ID'
+                  }
                 }
               }
             }
-          }
-        });
+          });
+        }
+        
+        // Create/update action chart
+        if (charts.actions) {
+          charts.actions.data.labels = actionLabels;
+          charts.actions.data.datasets[0].data = actionCounts;
+          charts.actions.update();
+        } else if (actionCtx) {
+          charts.actions = new Chart(actionCtx, {
+            type: 'bar',
+            data: {
+              labels: actionLabels,
+              datasets: [{
+                label: 'Request Count',
+                data: actionCounts,
+                backgroundColor: 'rgba(46, 204, 113, 0.6)',
+                borderColor: 'rgba(46, 204, 113, 1)',
+                borderWidth: 1
+              }]
+            },
+            options: {
+              ...chartOptions,
+              scales: {
+                ...chartOptions.scales,
+                x: {
+                  title: {
+                    display: true,
+                    text: 'Action Type'
+                  }
+                }
+              }
+            }
+          });
+        }
+      } catch (error) {
+        console.error('Error updating charts:', error);
       }
     }
     
