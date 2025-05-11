@@ -89,12 +89,24 @@ export function getTimeChartScript(rawTimeData) {
     // Store the raw time series data for flexible filtering
     const rawTimeData = ${JSON.stringify(rawTimeData)};
     
+    // Debug time zone information
+    console.log('Browser timezone:', Intl.DateTimeFormat().resolvedOptions().timeZone);
+    console.log('UTC offset in minutes:', new Date().getTimezoneOffset());
+    
     // Convert the raw data into a more usable format with actual Date objects
+    // Always load timestamps correctly from ISO strings (which are UTC)
     const timeSeriesDataPoints = rawTimeData.map(bucket => ({
       timestamp: new Date(bucket.timestamp),
       requests: bucket.totalRequests,
       processCounts: bucket.processCounts
     }));
+    
+    // Log out some information about the data range loaded
+    if (timeSeriesDataPoints.length > 0) {
+      console.log('Time data spans from:', 
+        timeSeriesDataPoints[0].timestamp.toLocaleString(), 'to',
+        timeSeriesDataPoints[timeSeriesDataPoints.length-1].timestamp.toLocaleString());
+    }
     
     // Initialize time chart
     const timeCtx = document.getElementById('timeSeriesChart').getContext('2d');
@@ -241,29 +253,53 @@ export function getTimeChartScript(rawTimeData) {
       return labels[interval] || 'Time';
     }
     
-    // Format date label based on interval
+    // Format date label based on interval with proper timezone display
     function formatDateLabel(date, interval) {
-      console.log('Formatting date', date, 'with interval', interval);
-      if (interval === 'minute') {
-        return date.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
-      } else if (interval.includes('min')) {
-        return date.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
-      } else if (interval === 'hour') {
-        return date.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+      // Add timezone indicator to all time displays
+      const options = { timeZoneName: 'short' };
+      
+      if (interval === 'minute' || interval.includes('min') || interval === 'hour') {
+        // For time-based intervals show hour:minute + timezone
+        return date.toLocaleTimeString([], {
+          hour: '2-digit', 
+          minute: '2-digit',
+          hour12: true, // Use AM/PM format
+          timeZoneName: 'short' // Show timezone abbreviation
+        });
       } else if (interval === 'day') {
-        return date.toLocaleDateString([], {month: 'short', day: 'numeric'});
+        // For day interval show abbreviated month + day
+        return date.toLocaleDateString([], {
+          month: 'short', 
+          day: 'numeric',
+          timeZoneName: 'short'
+        });
       }
-      return date.toLocaleString();
+      
+      // Default to a more complete format for other intervals
+      return date.toLocaleString([], {
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: true,
+        timeZoneName: 'short'
+      });
     }
     
     // Group data by the selected interval
     function groupDataByInterval(data, interval) {
       console.log('Grouping data with interval:', interval);
-      if (data.length === 0) return [];
+      if (data.length === 0) {
+        console.log('Warning: No data to group');
+        return [];
+      }
       
       // Sort data by timestamp (oldest first)
       const sortedData = [...data].sort((a, b) => a.timestamp - b.timestamp);
-      console.log('Sorted data range:', sortedData[0].timestamp, 'to', sortedData[sortedData.length-1].timestamp);
+      console.log('Sorted data range:', 
+                 sortedData[0].timestamp.toLocaleString(), ' to ', 
+                 sortedData[sortedData.length-1].timestamp.toLocaleString());
+      console.log('Data points count:', sortedData.length);
       
       // Determine grouping time increment in milliseconds
       let increment;
@@ -302,7 +338,8 @@ export function getTimeChartScript(rawTimeData) {
         Math.floor(currentTime.getTime() / increment) * increment
       );
       
-      console.log('Starting buckets from', currentTime.toLocaleString());
+      console.log('Starting buckets from', currentTime.toLocaleString(), 
+                 '(Unix timestamp:', currentTime.getTime(), ')');
       
       // Create a bucket for each interval in the range
       while (currentTime <= endTime) {

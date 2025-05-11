@@ -75,11 +75,16 @@ function initTimeSeriesBuckets() {
     const bucketTime = new Date(now - (i * TIME_BUCKET_SIZE_MS))
     metrics.timeSeriesData.push({
       timestamp: bucketTime.toISOString(),
-      hour: bucketTime.getHours(),
+      hour: bucketTime.getUTCHours(), // Use UTC hours for consistency
       totalRequests: 0,
       processCounts: {}
     })
   }
+  
+  _logger('Initialized %d time series buckets from %s to %s',
+    metrics.timeSeriesData.length,
+    metrics.timeSeriesData[0].timestamp,
+    metrics.timeSeriesData[metrics.timeSeriesData.length - 1].timestamp);
 }
 
 // Initialize time series data
@@ -128,36 +133,71 @@ export function recordRequestDetails(details) {
 }
 
 /**
+ * Get a consistent timestamp regardless of timezone
+ * Ensures all timestamps use the same timezone rules
+ * @param {Date|String} date - Date object or ISO string
+ * @returns {Date} Date object normalized to consistent timezone
+ */
+function normalizeTimestamp(date) {
+  // Convert to Date object if it's a string
+  const dateObj = typeof date === 'string' ? new Date(date) : date;
+  // Return the date object directly - consistent handling will be through
+  // toISOString() when storing and parsing back with new Date() when needed
+  return dateObj;
+}
+
+/**
  * Update time series data with a new request
  * @param {String} processId Process ID
  * @param {String} timestamp ISO timestamp string
  */
 function updateTimeSeriesData(processId, timestamp) {
   try {
-    const requestTime = new Date(timestamp);
-    const now = new Date();
-    
-    // Find the right time bucket for this request
-    const timeDiff = now - requestTime;
-    if (timeDiff > TIME_SERIES_BUCKETS * TIME_BUCKET_SIZE_MS) {
-      // Request is older than our tracking window
+    if (!timestamp) {
+      _logger('Warning: Missing timestamp in updateTimeSeriesData');
       return;
     }
+
+    const requestTime = normalizeTimestamp(timestamp);
     
-    const bucketIndex = Math.floor(timeDiff / TIME_BUCKET_SIZE_MS);
-    if (bucketIndex < 0 || bucketIndex >= metrics.timeSeriesData.length) {
-      return;
+    // Instead of using current time for bucket calculation,
+    // we'll calculate based on the actual bucket windows
+    
+    // The most recent bucket's end time
+    const newestBucketTime = normalizeTimestamp(metrics.timeSeriesData[metrics.timeSeriesData.length - 1].timestamp);
+    
+    // Is this request newer than our newest bucket? If so, we need new buckets
+    if (requestTime > newestBucketTime) {
+      // Force refresh time series to ensure we have buckets up to current time
+      refreshTimeSeriesData(requestTime);
     }
     
-    // Update bucket counts
-    const bucket = metrics.timeSeriesData[bucketIndex];
-    bucket.totalRequests += 1;
-    
-    // Update process count in bucket
-    if (!bucket.processCounts[processId]) {
-      bucket.processCounts[processId] = 0;
+    // Find which bucket this request belongs in by iterating through buckets
+    for (let i = 0; i < metrics.timeSeriesData.length; i++) {
+      const bucketTime = normalizeTimestamp(metrics.timeSeriesData[i].timestamp);
+      const nextBucketTime = i < metrics.timeSeriesData.length - 1 ?
+        normalizeTimestamp(metrics.timeSeriesData[i + 1].timestamp) :
+        new Date(bucketTime.getTime() + TIME_BUCKET_SIZE_MS);
+        
+      if (requestTime >= bucketTime && requestTime < nextBucketTime) {
+        // We found the right bucket, update the counts
+        metrics.timeSeriesData[i].totalRequests += 1;
+        
+        // Update process count in bucket
+        if (!metrics.timeSeriesData[i].processCounts[processId]) {
+          metrics.timeSeriesData[i].processCounts[processId] = 0;
+        }
+        metrics.timeSeriesData[i].processCounts[processId] += 1;
+        
+        _logger('Added request from %s to time bucket %s', 
+          requestTime.toISOString(), 
+          bucketTime.toISOString());
+        return;
+      }
     }
-    bucket.processCounts[processId] += 1;
+    
+    // If we get here, the request must be too old for our buckets
+    _logger('Request time %s outside of current bucket range', requestTime.toISOString());
     
   } catch (err) {
     _logger('Error updating time series data: %O', err);
@@ -258,23 +298,45 @@ export function finishTracking(tracking, action) {
 
 /**
  * Refresh time series data by adding a new bucket and removing oldest
+ * @param {Date} [upToTime] Optional timestamp to ensure buckets exist up to
  */
-function refreshTimeSeriesData() {
-  const now = Date.now();
-  const newBucketTime = new Date(now);
+function refreshTimeSeriesData(upToTime) {
+  // Use either the provided time or current time
+  const now = upToTime ? upToTime.getTime() : Date.now();
   
-  // Remove oldest bucket
-  if (metrics.timeSeriesData.length >= TIME_SERIES_BUCKETS) {
-    metrics.timeSeriesData.shift();
+  // If we have no buckets, initialize the full set
+  if (metrics.timeSeriesData.length === 0) {
+    initTimeSeriesBuckets();
+    return;
   }
   
-  // Add new bucket
-  metrics.timeSeriesData.push({
-    timestamp: newBucketTime.toISOString(),
-    hour: newBucketTime.getHours(),
-    totalRequests: 0,
-    processCounts: {}
-  });
+  // Get the time of the newest bucket
+  const lastBucketTime = new Date(metrics.timeSeriesData[metrics.timeSeriesData.length - 1].timestamp);
+  
+  // Calculate how many new buckets we need to add to reach the current time
+  const timeSinceLastBucket = now - lastBucketTime.getTime();
+  const bucketsToAdd = Math.max(1, Math.ceil(timeSinceLastBucket / TIME_BUCKET_SIZE_MS));
+  
+  _logger('Adding %d new time buckets', bucketsToAdd);
+  
+  // Add the required number of new buckets
+  for (let i = 0; i < bucketsToAdd; i++) {
+    // Calculate the time for this new bucket
+    const newBucketTime = new Date(lastBucketTime.getTime() + ((i + 1) * TIME_BUCKET_SIZE_MS));
+    
+    // Remove oldest bucket if we're at capacity
+    if (metrics.timeSeriesData.length >= TIME_SERIES_BUCKETS) {
+      metrics.timeSeriesData.shift();
+    }
+    
+    // Add new bucket with proper formatting
+    metrics.timeSeriesData.push({
+      timestamp: newBucketTime.toISOString(),
+      hour: newBucketTime.getUTCHours(), // Use UTC hours for consistency
+      totalRequests: 0,
+      processCounts: {}
+    });
+  }
 }
 
 // Refresh time series data every hour
