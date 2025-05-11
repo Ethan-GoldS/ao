@@ -181,7 +181,9 @@ async function createTables() {
     // Start transaction
     await client.query('BEGIN')
     
-    // We're now connected directly to the ur_metrics database, so no schema needed
+    // Ensure we're using the public schema in the ur_metrics database
+    await client.query('SET search_path TO public')
+    
     _logger('POSTGRES: Creating tables in ur_metrics database')
     console.log('POSTGRES: Creating tables in ur_metrics database')
     

@@ -16,6 +16,7 @@ const _logger = logger.child('dashboard');
 export function mountDashboard(app) {
   _logger('Mounting dashboard routes');
   
+  // Main dashboard HTML route
   app.get('/dashboard', (req, res) => {
     try {
       const metrics = getMetrics();
@@ -25,6 +26,29 @@ export function mountDashboard(app) {
     } catch (err) {
       _logger('Error generating dashboard HTML: %o', err);
       res.status(500).send('Internal Server Error');
+    }
+  });
+  
+  // JSON data endpoint for AJAX refreshing
+  app.get('/dashboard/data', (req, res) => {
+    try {
+      const metrics = getMetrics();
+      
+      // Prepare a simplified data object with just what the UI needs
+      const dashboardData = {
+        totalRequests: metrics.totalRequests || 0,
+        uniqueProcessIds: Object.keys(metrics.processCounts || {}).length,
+        uniqueIps: Object.keys(metrics.ipCounts || {}).length,
+        timeSeriesData: metrics.timeSeriesData || [],
+        startTime: metrics.startTime,
+        lastUpdated: new Date().toISOString()
+      };
+      
+      res.setHeader('Content-Type', 'application/json');
+      res.send(dashboardData);
+    } catch (err) {
+      _logger('Error generating dashboard data: %o', err);
+      res.status(500).json({ error: 'Failed to retrieve metrics data' });
     }
   });
 }
