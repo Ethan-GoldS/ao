@@ -339,13 +339,14 @@ export function getTimeChartScript(rawTimeData) {
         console.log('Last timestamp:', sortedData[sortedData.length-1].timestamp.toLocaleString());
         
         // Check if all timestamps are exactly the same
-        const allSameTimestamp = sortedData.every(d => 
-          d.timestamp.getTime() === sortedData[0].timestamp.getTime());
+        const allSameTimestamp = sortedData.every(function(d) {
+          return d.timestamp.getTime() === sortedData[0].timestamp.getTime();
+        });
         console.log('All timestamps identical?', allSameTimestamp);
         
         // Check timestamp distribution
         const timestampCounts = {};
-        sortedData.forEach(d => {
+        sortedData.forEach(function(d) {
           const timeKey = d.timestamp.toLocaleString();
           timestampCounts[timeKey] = (timestampCounts[timeKey] || 0) + 1;
         });
@@ -356,8 +357,8 @@ export function getTimeChartScript(rawTimeData) {
         Object.entries(timestampCounts)
           .sort((a, b) => b[1] - a[1])
           .slice(0, 5)
-          .forEach(([timestamp, count], i) => {
-            console.log(`  ${i+1}. ${timestamp}: ${count} occurrences`);
+          .forEach(function([timestamp, count], i) {
+            console.log('  ' + (i+1) + '. ' + timestamp + ': ' + count + ' occurrences');
           });
       }
       console.log('--- END DIAGNOSTICS ---\n');
