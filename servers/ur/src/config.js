@@ -40,7 +40,8 @@ const serverConfigSchema = z.object({
   ),
   aoUnit: z.enum(['cu', 'mu']),
   strategy: z.enum(['proxy', 'redirect']),
-  surUrl: z.string().url()
+  surUrl: z.string().url(),
+  enableMetrics: z.boolean().optional().default(false)
 })
 
 /**

@@ -7,6 +7,8 @@ import { logger } from './logger.js'
 
 import { proxyWith } from './proxy.js'
 import { redirectWith } from './redirect.js'
+import { metricsMiddleware } from './metricsMiddleware.js'
+import { setupDashboard } from './dashboard.js'
 
 const middlewareWithByStrategy = {
   proxy: proxyWith,
@@ -17,7 +19,17 @@ const middlewareWith = middlewareWithByStrategy[config.strategy]
 
 pipe(
   (app) => app.use(cors()),
+  (app) => app.use(express.json()), // Parse JSON request bodies
   (app) => app.get('/healthcheck', (req, res) => res.status(200).send('OK')),
+  // Setup metrics if enabled
+  (app) => {
+    if (config.enableMetrics) {
+      logger('Metrics enabled, setting up dashboard at /dashboard')
+      app.use(metricsMiddleware)
+      setupDashboard(app)
+    }
+    return app
+  },
   middlewareWith({ ...config }),
   (app) => {
     const server = app.listen(config.port, () => {
