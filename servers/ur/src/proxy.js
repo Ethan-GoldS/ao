@@ -34,9 +34,15 @@ export function proxyWith ({ aoUnit, hosts, surUrl, processToHost, ownerToHost }
     changeOrigin: true, // Change the origin of the host header to the target URL
     agent: httpsAgent, // Use our secure agent
     xfwd: true, // Add x-forwarded headers
-    proxyTimeout: 10000, // 10 second proxy timeout
+    proxyTimeout: 20000, // 20 second proxy timeout (increased for slow networks)
     timeout: 10000, // 10 second connection timeout
-    followRedirects: true // Follow redirects
+    followRedirects: true, // Follow redirects
+    // Default buffer behavior can be problematic
+    buffer: undefined, // Don't use default buffering
+    // Don't automatically set headers that might cause conflicts
+    preserveHeaderKeyCase: true,
+    // Support websockets if needed
+    ws: false
   })
   
   // Handle proxy errors at the global level
@@ -104,11 +110,21 @@ export function proxyWith ({ aoUnit, hosts, surUrl, processToHost, ownerToHost }
            * on the proxied request.
            *
            * If not needed, then this is simply set to undefined, which uses the unconsumed
-           * request stream fro the original request object
+           * request stream from the original request object
            *
            * See buffer option on https://www.npmjs.com/package/http-proxy#options
            */
-          const buffer = restreamBody ? await restreamBody(req) : undefined
+          // For POST/PUT with JSON body, ensure we have a complete body to send
+          let buffer;
+          if (req.body && (req.method === 'POST' || req.method === 'PUT')) {
+            // If we already have the body parsed, prepare a buffer with the JSON content
+            buffer = Buffer.from(JSON.stringify(req.body));
+            _logger('Prepared buffer from parsed body, size: %d bytes', buffer.length);
+          } else if (restreamBody) {
+            // Use provided restream function if available
+            buffer = await restreamBody(req);
+            _logger('Using provided restream buffer');
+          }
 
           const host = await determineHost({ processId, failoverAttempt })
 
@@ -127,6 +143,15 @@ export function proxyWith ({ aoUnit, hosts, surUrl, processToHost, ownerToHost }
              * If an error occurs, return the next iteration for our trampoline to invoke.
              */
             const isHttps = host.startsWith('https://')
+            // Set appropriate headers based on content
+            if (buffer && req.headers['content-type'] && req.headers['content-type'].includes('application/json')) {
+              if (!req.headers['content-length']) {
+                // Ensure content-length is set correctly for buffered content
+                req.headers['content-length'] = Buffer.isBuffer(buffer) ? buffer.length : Buffer.byteLength(buffer);
+                _logger('Set content-length header to %d for buffered request', req.headers['content-length']);
+              }
+            }
+            
             const proxyOptions = { 
               target: host, 
               buffer,
@@ -135,7 +160,17 @@ export function proxyWith ({ aoUnit, hosts, surUrl, processToHost, ownerToHost }
               xfwd: true, // Add x-forwarded headers
               prependPath: false, // Don't prepend the target path to the requested path
               hostRewrite: true, // Rewrite the host header to match the target
-              autoRewrite: true // Automatically rewrite the location header
+              autoRewrite: true, // Automatically rewrite the location header
+              // Tell proxy to suppress connection errors on the source (client) socket
+              // This prevents socket hangups when target server closes connection
+              suppressErrorsOnSource: true,
+              // Pass proper headers from client request
+              headers: {
+                // Explicit host header for target
+                host: new URL(host).host,
+                // Accept all content types
+                accept: req.headers.accept || '*/*'
+              }
             }
             
             // For HTTPS targets, ensure we're using proper TLS

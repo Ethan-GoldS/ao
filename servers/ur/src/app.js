@@ -18,8 +18,26 @@ const middlewareWithByStrategy = {
 const middlewareWith = middlewareWithByStrategy[config.strategy]
 
 pipe(
-  (app) => app.use(cors()),
-  (app) => app.use(express.json()), // Parse JSON request bodies
+  // Configure CORS with more permissive settings
+  (app) => {
+    const corsOptions = {
+      origin: '*', // Allow all origins
+      methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+      allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
+      exposedHeaders: ['Content-Range', 'X-Content-Range'],
+      credentials: true,
+      maxAge: 86400 // 24 hours
+    };
+    
+    // Apply CORS to all routes
+    app.use(cors(corsOptions));
+    
+    // Handle OPTIONS preflight requests specially
+    app.options('*', cors(corsOptions));
+    
+    return app;
+  },
+  (app) => app.use(express.json({ limit: '2mb' })), // Parse JSON request bodies with increased limit
   (app) => app.get('/healthcheck', (req, res) => res.status(200).send('OK')),
   // Setup metrics if enabled
   (app) => {

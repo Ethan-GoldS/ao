@@ -15,9 +15,33 @@ export function metricsMiddleware(req, res, next) {
   
   // Extract process ID from various places in the request
   let processId = req.params.processId;
-  if (!processId && req.query['process-id']) {
-    processId = req.query['process-id'];
+  
+  // Check query parameters - both camelCase and kebab-case versions
+  if (!processId && req.query) {
+    if (req.query['process-id']) {
+      processId = req.query['process-id'];
+    } else if (req.query.processId) {
+      processId = req.query.processId;
+    }
   }
+  
+  // Check if it's in the URL path
+  if (!processId && req.path) {
+    const pathParts = req.path.split('/');
+    if (pathParts.length > 2 && (pathParts[1] === 'state' || pathParts[1] === 'results' || pathParts[1] === 'cron')) {
+      processId = pathParts[2];
+    }
+  }
+  
+  // Extract from body if present
+  if (!processId && req.body) {
+    if (req.body.Target) {
+      processId = req.body.Target;
+    }
+  }
+  
+  // Log the extraction for debugging
+  logger('Metrics extracted processId: %s from %s %s', processId || 'unknown', req.method, req.path);
 
   // Store original URL and method
   const endpoint = req.method + ' ' + req.path;
