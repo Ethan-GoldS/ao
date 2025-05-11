@@ -62,30 +62,34 @@ const metrics = {
 // Maximum number of recent requests to keep
 const MAX_RECENT_REQUESTS = 100
 
-// Store a time series of request counts (last 24 hours with hourly buckets)
-const TIME_SERIES_BUCKETS = 24
-const TIME_BUCKET_SIZE_MS = 60 * 60 * 1000 // 1 hour
+// Store a time series of request counts with more granular 10-minute buckets
+const TIME_SERIES_BUCKETS = 144; // 24 hours worth of 10-minute buckets
+const TIME_BUCKET_SIZE_MS = 10 * 60 * 1000; // 10 minutes
 
 // Initialize time series buckets
 function initTimeSeriesBuckets() {
   const now = new Date();
   metrics.timeSeriesData = [];
   
-  // Start with current hour, rounded to the hour
-  const currentHour = new Date(now);
-  currentHour.setMinutes(0, 0, 0); // Set to start of hour
+  // Start with current time, rounded to the nearest 10-minute boundary
+  const currentTime = new Date(now);
+  // Round to nearest 10-minute boundary
+  const minutes = Math.floor(currentTime.getMinutes() / 10) * 10;
+  currentTime.setMinutes(minutes, 0, 0);
   
-  _logger('Initializing time series buckets starting from %s', currentHour.toISOString());
+  _logger('Initializing time series buckets starting from %s', currentTime.toISOString());
   
-  // Create hourly buckets going back in time
+  // Create 10-minute buckets going back in time
   for (let i = 0; i < TIME_SERIES_BUCKETS; i++) {
-    const bucketTime = new Date(currentHour);
-    bucketTime.setHours(currentHour.getHours() - i);
+    const bucketTime = new Date(currentTime);
+    // Go back by i*10 minutes
+    bucketTime.setMinutes(currentTime.getMinutes() - (i * 10));
     
     // Add bucket (most recent first in array)
     metrics.timeSeriesData.unshift({
       timestamp: bucketTime.toISOString(),
       hour: bucketTime.getHours(),
+      minute: bucketTime.getMinutes(),
       totalRequests: 0,
       processCounts: {}
     });
@@ -170,14 +174,12 @@ function updateTimeSeriesData(processId, timestamp) {
     _logger('Request time parsed: %s', requestTime.toISOString());
     
     // Find the appropriate time bucket for this request's actual timestamp
-    // Don't place requests in buckets based on relative time to now
-    // Instead, find which absolute time bucket this belongs to
-    
-    // Find or create the correct bucket based on the requestTime
-    // Round to the nearest hour boundary
+    // Round to the nearest 10-minute boundary for consistent bucket selection
     const bucketTime = new Date(requestTime);
-    // Round to the hour
-    bucketTime.setMinutes(0, 0, 0);
+    const minutes = Math.floor(bucketTime.getMinutes() / 10) * 10;
+    bucketTime.setMinutes(minutes, 0, 0);
+    
+    _logger('Looking for bucket near time: %s', bucketTime.toISOString());
     
     // Find the matching bucket or the closest one
     let targetBucket = null;
@@ -197,6 +199,10 @@ function updateTimeSeriesData(processId, timestamp) {
       _logger('No suitable bucket found for timestamp %s', timestamp);
       return;
     }
+    
+    // Log both timestamps to debug the bucket selection
+    _logger('Found bucket at %s for request at %s (diff: %d ms)', 
+           targetBucket.timestamp, bucketTime.toISOString(), closestDiff);
     
     // Update bucket counts
     targetBucket.totalRequests += 1;
@@ -313,20 +319,22 @@ export function finishTracking(tracking, action) {
 function refreshTimeSeriesData() {
   const now = new Date();
   
-  // Create a new bucket at the current hour boundary
+  // Create a new bucket at the current 10-minute boundary
   const newBucketTime = new Date(now);
-  newBucketTime.setMinutes(0, 0, 0);
+  // Round to nearest 10-minute boundary
+  const minutes = Math.floor(newBucketTime.getMinutes() / 10) * 10;
+  newBucketTime.setMinutes(minutes, 0, 0);
   
   _logger('Refreshing time buckets at %s', now.toISOString());
   
-  // Check if we already have a bucket for this hour
+  // Check if we already have a bucket for this 10-minute time slot
   const mostRecentBucket = metrics.timeSeriesData[metrics.timeSeriesData.length - 1];
   if (mostRecentBucket) {
     const mostRecentTime = new Date(mostRecentBucket.timestamp);
-    const hourDiff = (newBucketTime - mostRecentTime) / (60 * 60 * 1000);
+    const timeDiff = (newBucketTime - mostRecentTime) / (60 * 1000); // diff in minutes
     
-    // If we already have a bucket for the current hour, nothing to do
-    if (hourDiff < 1) {
+    // If we already have a bucket for the current 10-minute period, nothing to do
+    if (timeDiff < 10) {
       _logger('Most recent bucket is still current (%s), not refreshing yet', 
               mostRecentBucket.timestamp);
       return;
@@ -343,6 +351,7 @@ function refreshTimeSeriesData() {
   metrics.timeSeriesData.push({
     timestamp: newBucketTime.toISOString(),
     hour: newBucketTime.getHours(),
+    minute: newBucketTime.getMinutes(),
     totalRequests: 0,
     processCounts: {}
   });
@@ -350,7 +359,7 @@ function refreshTimeSeriesData() {
   _logger('Added new bucket for %s', newBucketTime.toISOString());
 }
 
-// Refresh time series data every hour
+// Refresh time series data every 10 minutes
 setInterval(refreshTimeSeriesData, TIME_BUCKET_SIZE_MS);
 
 // Save metrics to disk periodically if storage is enabled
