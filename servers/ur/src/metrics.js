@@ -66,8 +66,14 @@ const MAX_RECENT_REQUESTS = 100
 const TIME_SERIES_BUCKETS = 144; // 24 hours worth of 10-minute buckets
 const TIME_BUCKET_SIZE_MS = 10 * 60 * 1000; // 10 minutes
 
-// Initialize time series buckets
+// Initialize time series buckets - only called when no data exists
 function initTimeSeriesBuckets() {
+  // Only initialize if we don't already have data
+  if (metrics.timeSeriesData && metrics.timeSeriesData.length > 0) {
+    _logger('Time series data already exists, not re-initializing');
+    return;
+  }
+
   const now = new Date();
   metrics.timeSeriesData = [];
   
@@ -390,7 +396,7 @@ function saveMetricsToDisk() {
     const metricsFilePath = path.join(STORAGE_PATH, 'metrics.json');
     const metricsBackupPath = path.join(STORAGE_PATH, `metrics-backup-${timestamp}.json`);
     
-    // Create metrics data for storage
+    // Create metrics data for storage - include everything we need to restore state
     const storageData = {
       version: '1.0',
       savedAt: new Date().toISOString(),
@@ -402,8 +408,12 @@ function saveMetricsToDisk() {
       actionTiming: metrics.actionTiming,
       ipCounts: metrics.ipCounts,
       referrerCounts: metrics.referrerCounts,
+      recentRequests: metrics.recentRequests, // Now saving recent requests for preservation
       timeSeriesData: metrics.timeSeriesData
     };
+    
+    _logger('Saving metrics state with %d time series buckets and %d recent requests',
+            metrics.timeSeriesData.length, metrics.recentRequests.length);
     
     // Save main file
     fs.writeFileSync(metricsFilePath, JSON.stringify(storageData, null, 2));
@@ -444,10 +454,35 @@ function loadMetricsFromDisk() {
       metrics.actionTiming = savedData.actionTiming || {};
       metrics.ipCounts = savedData.ipCounts || {};
       metrics.referrerCounts = savedData.referrerCounts || {};
+      metrics.recentRequests = savedData.recentRequests || [];
       
-      // Only load time series data if format matches
-      if (Array.isArray(savedData.timeSeriesData) && savedData.timeSeriesData.length === TIME_SERIES_BUCKETS) {
-        metrics.timeSeriesData = savedData.timeSeriesData;
+      // Load time series data regardless of bucket size differences
+      // We'll preserve all historical data and adapt it to our current format if needed
+      if (Array.isArray(savedData.timeSeriesData) && savedData.timeSeriesData.length > 0) {
+        _logger('Loading %d time series buckets from saved data', savedData.timeSeriesData.length);
+        
+        // Ensure each bucket has the expected structure with minutes property
+        const enhancedTimeSeriesData = savedData.timeSeriesData.map(bucket => {
+          // Extract or compute the minute value
+          if (bucket.minute === undefined) {
+            const bucketDate = new Date(bucket.timestamp);
+            bucket.minute = bucketDate.getMinutes();
+          }
+          return bucket;
+        });
+        
+        metrics.timeSeriesData = enhancedTimeSeriesData;
+        
+        // Log the time range of restored data
+        const firstBucket = new Date(metrics.timeSeriesData[0].timestamp);
+        const lastBucket = new Date(metrics.timeSeriesData[metrics.timeSeriesData.length - 1].timestamp);
+        _logger('Restored time buckets covering %s to %s', 
+                firstBucket.toISOString(),
+                lastBucket.toISOString());
+      } else {
+        // Initialize new buckets if none were found
+        _logger('No valid time series data found in saved metrics, initializing new buckets');
+        initTimeSeriesBuckets();
       }
       
       _logger('Loaded metrics from disk: %d total requests restored', metrics.totalRequests);
