@@ -1,207 +1,64 @@
 /**
  * Metrics service for the AO Router
  * Tracks request metrics without interfering with core proxy functionality
- * Includes persistent storage when METRICS_STORAGE_PATH is set
+ * Uses SQLite for robust storage and querying capabilities
  */
 import { logger } from './logger.js'
-import fs from 'fs'
-import path from 'path'
+import * as MetricsDb from './metrics-db.js'
 import { config } from './config.js'
 
 const _logger = logger.child('metrics')
 
-// Storage settings
-const STORAGE_PATH = process.env.METRICS_STORAGE_PATH || null
-// Default save interval is 60 seconds, but can be overridden with env var (in seconds)
-const STORAGE_INTERVAL_MS = (parseInt(process.env.METRICS_SAVE_INTERVAL) || 60) * 1000
+// Initialize database when this module is loaded
+MetricsDb.initMetricsDb().then(() => {
+  _logger('SQLite metrics database initialized successfully')
+}).catch(err => {
+  _logger('Failed to initialize SQLite metrics database: %O', err)
+})
 
-// Check if persistent storage is enabled
-const isPersistentStorageEnabled = !!STORAGE_PATH
-
-if (isPersistentStorageEnabled) {
-  _logger('Persistent metrics storage enabled at: %s', STORAGE_PATH)
-  // Create directory if it doesn't exist
-  try {
-    if (!fs.existsSync(STORAGE_PATH)) {
-      fs.mkdirSync(STORAGE_PATH, { recursive: true })
-      _logger('Created metrics storage directory: %s', STORAGE_PATH)
-    }
-  } catch (err) {
-    _logger('Error creating metrics storage directory: %O', err)
-  }
-} else {
-  _logger('Persistent metrics storage disabled. Set METRICS_STORAGE_PATH to enable.')
-}
-
-// Store metrics in memory (will reset on server restart)
-const metrics = {
-  // Track recent requests with timestamp, process ID, IP, action, duration
-  recentRequests: [],
-  // Track detailed request info including headers and payload summaries
-  requestDetails: {},
-  // Track counts by process ID
-  processCounts: {},
-  // Track counts by action
-  actionCounts: {},
-  // Track average duration by process ID
-  processTiming: {},
-  // Track average duration by action
-  actionTiming: {},
-  // Track counts by IP address
-  ipCounts: {},
-  // Track counts by referrer
-  referrerCounts: {},
-  // Track counts by time period (hourly)
-  timeSeriesData: [],
-  // Number of total requests
-  totalRequests: 0,
-  // Server start time
-  startTime: new Date().toISOString()
-}
-
-// Maximum number of recent requests to keep
-const MAX_RECENT_REQUESTS = 100
-
-// Store a time series of request counts (last 24 hours with hourly buckets)
-const TIME_SERIES_BUCKETS = 24
-const TIME_BUCKET_SIZE_MS = 60 * 60 * 1000 // 1 hour
-
-// Initialize time series buckets
-function initTimeSeriesBuckets() {
-  const now = Date.now()
-  metrics.timeSeriesData = []
-  
-  for (let i = TIME_SERIES_BUCKETS - 1; i >= 0; i--) {
-    const bucketTime = new Date(now - (i * TIME_BUCKET_SIZE_MS))
-    metrics.timeSeriesData.push({
-      timestamp: bucketTime.toISOString(),
-      hour: bucketTime.getUTCHours(), // Use UTC hours for consistency
-      totalRequests: 0,
-      processCounts: {}
-    })
-  }
-  
-  _logger('Initialized %d time series buckets from %s to %s',
-    metrics.timeSeriesData.length,
-    metrics.timeSeriesData[0].timestamp,
-    metrics.timeSeriesData[metrics.timeSeriesData.length - 1].timestamp);
-}
-
-// Initialize time series data
-initTimeSeriesBuckets()
-
-// Load persisted metrics if available
-loadMetricsFromDisk()
+/**
+ * Constants for metrics configuration
+ */
+const TIME_SERIES_BUCKETS = 24 // Default number of time buckets (24 hours)
+const TIME_BUCKET_SIZE_MS = 60 * 60 * 1000 // Default bucket size (1 hour)
 
 /**
  * Record detailed information about a request
  * @param {Object} details Request details object
+ * @returns {Promise<number|null>} The ID of the inserted record or null if failed
  */
-export function recordRequestDetails(details) {
-  if (!details || !details.processId) return;
+export async function recordRequestDetails(details) {
+  if (!details || !details.processId) return null;
   
   const { processId, ip, referer, timestamp } = details;
   
-  // Store detailed request info keyed by processId
-  if (!metrics.requestDetails[processId]) {
-    metrics.requestDetails[processId] = [];
+  try {
+    // Store in SQLite database
+    const requestId = await MetricsDb.recordRequest({
+      timestamp,
+      processId,
+      ip: ip || 'unknown',
+      action: null,
+      duration: 0,
+      details: details  // Save all details for future reference
+    });
+    
+    _logger('Recorded request details for process %s', processId);
+    return requestId;
+  } catch (err) {
+    _logger('Error recording request details to SQLite: %O', err);
+    return null;
   }
-  
-  // Add to details list and limit to 20 requests per process ID
-  metrics.requestDetails[processId].unshift(details);
-  if (metrics.requestDetails[processId].length > 20) {
-    metrics.requestDetails[processId].length = 20;
-  }
-  
-  // Update IP counts
-  if (ip && ip !== 'unknown') {
-    metrics.ipCounts[ip] = (metrics.ipCounts[ip] || 0) + 1;
-  }
-  
-  // Update referrer counts
-  if (referer && referer !== 'unknown') {
-    metrics.referrerCounts[referer] = (metrics.referrerCounts[referer] || 0) + 1;
-  }
-  
-  // Update time series data
-  updateTimeSeriesData(processId, timestamp);
-  
-  // Increment total requests
-  metrics.totalRequests += 1;
-  
-  _logger('Recorded request details for process %s', processId);
 }
 
 /**
- * Get a consistent timestamp regardless of timezone
- * Ensures all timestamps use the same timezone rules
+ * Helper function to normalize timestamps consistently
  * @param {Date|String} date - Date object or ISO string
  * @returns {Date} Date object normalized to consistent timezone
  */
 function normalizeTimestamp(date) {
   // Convert to Date object if it's a string
-  const dateObj = typeof date === 'string' ? new Date(date) : date;
-  // Return the date object directly - consistent handling will be through
-  // toISOString() when storing and parsing back with new Date() when needed
-  return dateObj;
-}
-
-/**
- * Update time series data with a new request
- * @param {String} processId Process ID
- * @param {String} timestamp ISO timestamp string
- */
-function updateTimeSeriesData(processId, timestamp) {
-  try {
-    if (!timestamp) {
-      _logger('Warning: Missing timestamp in updateTimeSeriesData');
-      return;
-    }
-
-    const requestTime = normalizeTimestamp(timestamp);
-    
-    // Instead of using current time for bucket calculation,
-    // we'll calculate based on the actual bucket windows
-    
-    // The most recent bucket's end time
-    const newestBucketTime = normalizeTimestamp(metrics.timeSeriesData[metrics.timeSeriesData.length - 1].timestamp);
-    
-    // Is this request newer than our newest bucket? If so, we need new buckets
-    if (requestTime > newestBucketTime) {
-      // Force refresh time series to ensure we have buckets up to current time
-      refreshTimeSeriesData(requestTime);
-    }
-    
-    // Find which bucket this request belongs in by iterating through buckets
-    for (let i = 0; i < metrics.timeSeriesData.length; i++) {
-      const bucketTime = normalizeTimestamp(metrics.timeSeriesData[i].timestamp);
-      const nextBucketTime = i < metrics.timeSeriesData.length - 1 ?
-        normalizeTimestamp(metrics.timeSeriesData[i + 1].timestamp) :
-        new Date(bucketTime.getTime() + TIME_BUCKET_SIZE_MS);
-        
-      if (requestTime >= bucketTime && requestTime < nextBucketTime) {
-        // We found the right bucket, update the counts
-        metrics.timeSeriesData[i].totalRequests += 1;
-        
-        // Update process count in bucket
-        if (!metrics.timeSeriesData[i].processCounts[processId]) {
-          metrics.timeSeriesData[i].processCounts[processId] = 0;
-        }
-        metrics.timeSeriesData[i].processCounts[processId] += 1;
-        
-        _logger('Added request from %s to time bucket %s', 
-          requestTime.toISOString(), 
-          bucketTime.toISOString());
-        return;
-      }
-    }
-    
-    // If we get here, the request must be too old for our buckets
-    _logger('Request time %s outside of current bucket range', requestTime.toISOString());
-    
-  } catch (err) {
-    _logger('Error updating time series data: %O', err);
-  }
+  return typeof date === 'string' ? new Date(date) : date;
 }
 
 /**
@@ -233,7 +90,12 @@ export function startTracking(req) {
   return {
     startTime: Date.now(),
     processId: req.query['process-id'] || null,
-    ip: req.ip || req.headers['x-forwarded-for'] || 'unknown'
+    ip: req.ip || req.headers['x-forwarded-for'] || 'unknown',
+    headers: req.headers,
+    path: req.path,
+    method: req.method,
+    query: req.query,
+    body: req.body
   };
 }
 
@@ -241,275 +103,116 @@ export function startTracking(req) {
  * Finish tracking a request and record metrics
  * @param {Object} tracking Request tracking object from startTracking
  * @param {String} action Action from request
+ * @returns {Promise<number|null>} The ID of the inserted record or null if failed
  */
-export function finishTracking(tracking, action) {
-  if (!tracking || !tracking.startTime) return;
+export async function finishTracking(tracking, action) {
+  if (!tracking || !tracking.startTime) return null;
   
   const duration = tracking.duration || (Date.now() - tracking.startTime);
-  const { processId, ip } = tracking;
+  const { processId, ip, headers, path, method, query, body } = tracking;
   
-  if (!processId) return;
+  if (!processId) return null;
   
-  // Add to recent requests (limit size and keep most recent)
-  metrics.recentRequests.unshift({
-    timestamp: new Date(tracking.startTime).toISOString(), // Use the actual request start time
-    processId,
-    ip,
-    action,
-    duration
-  });
-  
-  if (metrics.recentRequests.length > MAX_RECENT_REQUESTS) {
-    metrics.recentRequests.length = MAX_RECENT_REQUESTS;
-  }
-  
-  // Update process counts
-  metrics.processCounts[processId] = (metrics.processCounts[processId] || 0) + 1;
-  
-  // Update action counts if action exists
-  if (action) {
-    metrics.actionCounts[action] = (metrics.actionCounts[action] || 0) + 1;
-  }
-  
-  // Update timing metrics for process
-  if (!metrics.processTiming[processId]) {
-    metrics.processTiming[processId] = {
-      totalDuration: 0,
-      count: 0
-    };
-  }
-  metrics.processTiming[processId].totalDuration += duration;
-  metrics.processTiming[processId].count += 1;
-  
-  // Update timing metrics for action if action exists
-  if (action) {
-    if (!metrics.actionTiming[action]) {
-      metrics.actionTiming[action] = {
-        totalDuration: 0,
-        count: 0
-      };
-    }
-    metrics.actionTiming[action].totalDuration += duration;
-    metrics.actionTiming[action].count += 1;
-  }
-  
-  _logger('Recorded metrics for process %s, action %s, duration %dms', processId, action, duration);
-}
-
-/**
- * Refresh time series data by adding a new bucket and removing oldest
- * @param {Date} [upToTime] Optional timestamp to ensure buckets exist up to
- */
-function refreshTimeSeriesData(upToTime) {
-  // Use either the provided time or current time
-  const now = upToTime ? upToTime.getTime() : Date.now();
-  
-  // If we have no buckets, initialize the full set
-  if (metrics.timeSeriesData.length === 0) {
-    initTimeSeriesBuckets();
-    return;
-  }
-  
-  // Get the time of the newest bucket
-  const lastBucketTime = new Date(metrics.timeSeriesData[metrics.timeSeriesData.length - 1].timestamp);
-  
-  // Calculate how many new buckets we need to add to reach the current time
-  const timeSinceLastBucket = now - lastBucketTime.getTime();
-  const bucketsToAdd = Math.max(1, Math.ceil(timeSinceLastBucket / TIME_BUCKET_SIZE_MS));
-  
-  _logger('Adding %d new time buckets', bucketsToAdd);
-  
-  // Add the required number of new buckets
-  for (let i = 0; i < bucketsToAdd; i++) {
-    // Calculate the time for this new bucket
-    const newBucketTime = new Date(lastBucketTime.getTime() + ((i + 1) * TIME_BUCKET_SIZE_MS));
-    
-    // Remove oldest bucket if we're at capacity
-    if (metrics.timeSeriesData.length >= TIME_SERIES_BUCKETS) {
-      metrics.timeSeriesData.shift();
-    }
-    
-    // Add new bucket with proper formatting
-    metrics.timeSeriesData.push({
-      timestamp: newBucketTime.toISOString(),
-      hour: newBucketTime.getUTCHours(), // Use UTC hours for consistency
-      totalRequests: 0,
-      processCounts: {}
-    });
-  }
-}
-
-// Refresh time series data every hour
-setInterval(refreshTimeSeriesData, TIME_BUCKET_SIZE_MS);
-
-// Save metrics to disk periodically if storage is enabled
-if (isPersistentStorageEnabled) {
-  // Save immediately on startup
-  setTimeout(() => {
-    _logger('Performing initial metrics save...');
-    saveMetricsToDisk();
-  }, 5000); // Wait 5 seconds for initial metrics collection
-  
-  // Then set up the regular interval
-  setInterval(saveMetricsToDisk, STORAGE_INTERVAL_MS);
-  
-  // Log the save interval for debugging
-  _logger('Metrics will be saved every %d seconds to: %s', STORAGE_INTERVAL_MS / 1000, STORAGE_PATH);
-}
-
-/**
- * Save current metrics to disk for persistence
- */
-function saveMetricsToDisk() {
-  if (!isPersistentStorageEnabled) return;
+  // Create timestamp from the actual request start time
+  const timestamp = new Date(tracking.startTime).toISOString();
   
   try {
-    const timestamp = new Date().toISOString().replace(/:/g, '-');
-    
-    // Save main metrics file
-    const metricsFilePath = path.join(STORAGE_PATH, 'metrics.json');
-    const metricsBackupPath = path.join(STORAGE_PATH, `metrics-backup-${timestamp}.json`);
-    
-    // Create metrics data for storage
-    const storageData = {
-      version: '1.0',
-      savedAt: new Date().toISOString(),
-      startTime: metrics.startTime,
-      totalRequests: metrics.totalRequests,
-      processCounts: metrics.processCounts,
-      actionCounts: metrics.actionCounts,
-      processTiming: metrics.processTiming,
-      actionTiming: metrics.actionTiming,
-      ipCounts: metrics.ipCounts,
-      referrerCounts: metrics.referrerCounts,
-      timeSeriesData: metrics.timeSeriesData
-    };
-    
-    // Save main file
-    fs.writeFileSync(metricsFilePath, JSON.stringify(storageData, null, 2));
-    
-    // Save backup file (once per hour)
-    if (new Date().getMinutes() === 0) {
-      fs.writeFileSync(metricsBackupPath, JSON.stringify(storageData, null, 2));
-      
-      // Clean up old backups (keep last 24)
-      cleanupOldBackups();
-    }
-    
-    _logger('Metrics saved to disk successfully');
-  } catch (err) {
-    _logger('Error saving metrics to disk: %O', err);
-  }
-}
-
-/**
- * Load metrics from disk if available
- */
-function loadMetricsFromDisk() {
-  if (!isPersistentStorageEnabled) return;
-  
-  try {
-    const metricsFilePath = path.join(STORAGE_PATH, 'metrics.json');
-    
-    if (fs.existsSync(metricsFilePath)) {
-      const fileContent = fs.readFileSync(metricsFilePath, 'utf8');
-      const savedData = JSON.parse(fileContent);
-      
-      // Merge saved data with current metrics
-      metrics.startTime = savedData.startTime || metrics.startTime;
-      metrics.totalRequests = savedData.totalRequests || 0;
-      metrics.processCounts = savedData.processCounts || {};
-      metrics.actionCounts = savedData.actionCounts || {};
-      metrics.processTiming = savedData.processTiming || {};
-      metrics.actionTiming = savedData.actionTiming || {};
-      metrics.ipCounts = savedData.ipCounts || {};
-      metrics.referrerCounts = savedData.referrerCounts || {};
-      
-      // Only load time series data if format matches
-      if (Array.isArray(savedData.timeSeriesData) && savedData.timeSeriesData.length === TIME_SERIES_BUCKETS) {
-        metrics.timeSeriesData = savedData.timeSeriesData;
+    // Store in SQLite database with all metadata
+    const requestId = await MetricsDb.recordRequest({
+      timestamp,
+      processId,
+      ip,
+      action,
+      duration,
+      details: {
+        headers,
+        path,
+        method,
+        query,
+        body: body ? JSON.stringify(body).substring(0, 1000) : null // Truncate to avoid overly large storage
       }
-      
-      _logger('Loaded metrics from disk: %d total requests restored', metrics.totalRequests);
-    } else {
-      _logger('No saved metrics file found, starting with empty metrics');
-    }
+    });
+    
+    _logger('Recorded metrics for process %s, action %s, duration %dms', processId, action, duration);
+    return requestId;
   } catch (err) {
-    _logger('Error loading metrics from disk: %O', err);
+    _logger('Error recording request metrics to SQLite: %O', err);
+    return null;
   }
 }
 
 /**
- * Clean up old backup files, keeping only the most recent 24
+ * Get time series data from the SQLite database
+ * @param {Object} options Time series options
+ * @param {Date} [options.startTime] Start time for the range
+ * @param {Date} [options.endTime] End time for the range
+ * @param {string} [options.interval='hour'] Time grouping interval (minute, 5min, 10min, 15min, 30min, hour, day)
+ * @param {string} [options.processId] Optional filter by process ID
+ * @returns {Promise<Array>} Array of time series data points
  */
-function cleanupOldBackups() {
+export async function getTimeSeriesData(options = {}) {
   try {
-    const backupFiles = fs.readdirSync(STORAGE_PATH)
-      .filter(file => file.startsWith('metrics-backup-'))
-      .sort()
-      .reverse(); // Most recent first
+    // Default to last 24 hours if not specified
+    const endTime = options.endTime || new Date();
+    const startTime = options.startTime || new Date(endTime.getTime() - (TIME_SERIES_BUCKETS * TIME_BUCKET_SIZE_MS));
     
-    // Keep the 24 most recent backups
-    if (backupFiles.length > 24) {
-      const filesToDelete = backupFiles.slice(24);
-      
-      filesToDelete.forEach(file => {
-        fs.unlinkSync(path.join(STORAGE_PATH, file));
-      });
-      
-      _logger('Cleaned up %d old backup files', filesToDelete.length);
-    }
+    // Get time series data from database
+    const timeSeriesData = await MetricsDb.getTimeSeriesData({
+      startTime,
+      endTime,
+      interval: options.interval || 'hour',
+      processId: options.processId
+    });
+    
+    _logger('Retrieved time series data from SQLite: %d data points', timeSeriesData.length);
+    return timeSeriesData;
   } catch (err) {
-    _logger('Error cleaning up old backup files: %O', err);
+    _logger('Error retrieving time series data: %O', err);
+    return [];  
   }
+}
+
+/**
+ * Search for metrics data with complex criteria
+ * @param {Object} criteria Search criteria
+ * @returns {Promise<Array>} Matching requests
+ */
+export async function searchMetrics(criteria) {
+  return MetricsDb.searchMetrics(criteria);
+}
+
+/**
+ * Get detailed information for a specific request
+ * @param {number} requestId Request ID
+ * @returns {Promise<Object>} Complete request details
+ */
+export async function getRequestDetails(requestId) {
+  return MetricsDb.getRequestDetails(requestId);
 }
 
 /**
  * Get all metrics for dashboard display
- * @returns {Object} All metrics
+ * @returns {Promise<Object>} All metrics data from the database
  */
-export function getMetrics() {
-  // Calculate average durations for easier display
-  const processTimingWithAvg = {};
-  Object.keys(metrics.processTiming).forEach(processId => {
-    const { totalDuration, count } = metrics.processTiming[processId];
-    processTimingWithAvg[processId] = {
-      totalDuration,
-      count,
-      avgDuration: count > 0 ? totalDuration / count : 0
+export async function getMetrics() {
+  try {
+    // Get fresh metrics from SQLite
+    const metrics = await MetricsDb.getAllMetrics();
+    return metrics;
+  } catch (err) {
+    _logger('Error getting metrics from SQLite: %O', err);
+    // Return empty data in case of error
+    return {
+      startTime: new Date().toISOString(),
+      totalRequests: 0,
+      recentRequests: [],
+      processCounts: {},
+      actionCounts: {},
+      processTiming: {},
+      actionTiming: {},
+      ipCounts: [],
+      referrerCounts: [],
+      timeSeriesData: []
     };
-  });
-  
-  const actionTimingWithAvg = {};
-  Object.keys(metrics.actionTiming).forEach(action => {
-    const { totalDuration, count } = metrics.actionTiming[action];
-    actionTimingWithAvg[action] = {
-      totalDuration,
-      count,
-      avgDuration: count > 0 ? totalDuration / count : 0
-    };
-  });
-  
-  // Get top IPs and top referrers
-  const topIps = Object.entries(metrics.ipCounts)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 10);
-    
-  const topReferrers = Object.entries(metrics.referrerCounts)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 10);
-  
-  return {
-    startTime: metrics.startTime,
-    totalRequests: metrics.totalRequests,
-    recentRequests: metrics.recentRequests,
-    requestDetails: metrics.requestDetails,
-    processCounts: metrics.processCounts,
-    actionCounts: metrics.actionCounts,
-    processTiming: processTimingWithAvg,
-    actionTiming: actionTimingWithAvg,
-    ipCounts: topIps,
-    referrerCounts: topReferrers,
-    timeSeriesData: metrics.timeSeriesData
-  };
+  }
 }
