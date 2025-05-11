@@ -95,11 +95,38 @@ export function getTimeChartScript(rawTimeData) {
     
     // Convert the raw data into a more usable format with actual Date objects
     // Always load timestamps correctly from ISO strings (which are UTC)
-    const timeSeriesDataPoints = rawTimeData.map(bucket => ({
-      timestamp: new Date(bucket.timestamp),
-      requests: bucket.totalRequests,
-      processCounts: bucket.processCounts
-    }));
+    const timeSeriesDataPoints = rawTimeData.map(bucket => {
+      // Debug the raw bucket for troubleshooting
+      console.log('Processing bucket:', JSON.stringify(bucket));
+      
+      // Normalize PostgreSQL format - handle different property names
+      let totalRequests = bucket.totalRequests;
+      if (typeof totalRequests !== 'number' && bucket.total_requests) {
+        totalRequests = parseInt(bucket.total_requests, 10) || 0;
+      }
+      
+      // Handle process counts - could be string JSON or object
+      let processCounts = bucket.processCounts;
+      if (!processCounts && bucket.process_counts) {
+        processCounts = bucket.process_counts;
+      }
+      
+      // If processCounts is a string (common in PostgreSQL), parse it
+      if (typeof processCounts === 'string') {
+        try {
+          processCounts = JSON.parse(processCounts);
+        } catch (e) {
+          console.error('Error parsing process counts:', e);
+          processCounts = {};
+        }
+      }
+      
+      return {
+        timestamp: new Date(bucket.timestamp),
+        requests: totalRequests,
+        processCounts: processCounts || {}
+      };
+    }).filter(item => item.timestamp instanceof Date);
     
     // Log out some information about the data range loaded
     if (timeSeriesDataPoints.length > 0) {

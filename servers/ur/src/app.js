@@ -10,6 +10,7 @@ import { redirectWith } from './redirect.js'
 import { metricsMiddleware } from './middleware/metricsMiddleware.js'
 import { mountDashboard } from './routes/dashboard.js'
 import diagnosticsRoutes from './routes/diagnostics.js'
+import dataDebugRoutes from './routes/dataDebug.js'
 
 const middlewareWithByStrategy = {
   proxy: proxyWith,
@@ -34,6 +35,10 @@ pipe(
     // Mount diagnostics routes for debugging
     app.use('/diagnostics', diagnosticsRoutes)
     logger('Diagnostics routes mounted at /diagnostics')
+    
+    // Mount data debug route for dashboard troubleshooting
+    app.use('/data-debug', dataDebugRoutes)
+    logger('Data debug route mounted at /data-debug')
     
     return app
   },

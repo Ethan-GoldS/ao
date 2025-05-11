@@ -24,10 +24,44 @@ const _logger = logger.child('dashboard');
 export function generateDashboardHtml(metrics) {
   _logger('Generating dashboard HTML with metrics data');
   
+  // Log the raw metrics data for debugging
+  console.log('RAW DASHBOARD METRICS:', JSON.stringify({
+    totalRequests: metrics?.totalRequests,
+    timeSeriesLength: metrics?.timeSeriesData?.length,
+    timeSeriesSample: metrics?.timeSeriesData?.slice(0, 2),
+    processCountsKeys: metrics ? Object.keys(metrics.processCounts || {}) : [],
+    ipCountsKeys: metrics ? Object.keys(metrics.ipCounts || {}) : []
+  }, null, 2));
+  
   // Make sure metrics is an object and has required properties
   metrics = metrics || {};
   metrics.processCounts = metrics.processCounts || {};
   metrics.timeSeriesData = metrics.timeSeriesData || [];
+
+  // PostgreSQL may return data differently than the file-based format
+  // Normalize the time series data format
+  if (metrics.timeSeriesData && metrics.timeSeriesData.length > 0) {
+    _logger('Processing %d time series data points for display', metrics.timeSeriesData.length);
+    console.log('Time series data sample:', JSON.stringify(metrics.timeSeriesData[0]));
+    
+    // Ensure processCounts in each time series item is in the right format
+    metrics.timeSeriesData = metrics.timeSeriesData.map(item => {
+      if (!item) return null;
+      
+      // Convert processCounts if it's not in the expected format
+      if (typeof item.processCounts === 'string') {
+        try {
+          item.processCounts = JSON.parse(item.processCounts);
+        } catch (e) {
+          item.processCounts = {};
+        }
+      } else if (!item.processCounts) {
+        item.processCounts = {};
+      }
+      
+      return item;
+    }).filter(Boolean);
+  }
 
   // Prepare data for process metrics table
   const allProcessIds = Object.keys(metrics.processCounts);
