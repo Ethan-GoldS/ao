@@ -331,7 +331,7 @@ export function getTimeChartScript(rawTimeData) {
       // But for consistency, we'll apply grouping in all cases
       
       // DETAILED DATA ANALYSIS DIAGNOSTICS
-      console.log('\n--- DETAILED TIMESTAMP DIAGNOSTICS ---');
+      console.log('--- DETAILED TIMESTAMP DIAGNOSTICS ---');
       
       if (sortedData.length > 0) {
         console.log('Total data points:', sortedData.length);
@@ -361,7 +361,7 @@ export function getTimeChartScript(rawTimeData) {
             console.log('  ' + (i+1) + '. ' + timestamp + ': ' + count + ' occurrences');
           });
       }
-      console.log('--- END DIAGNOSTICS ---\n');
+      console.log('--- END DIAGNOSTICS ---');
       
       // Create buckets for each time interval in the range
       const result = [];
