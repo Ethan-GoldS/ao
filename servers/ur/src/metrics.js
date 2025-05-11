@@ -68,16 +68,11 @@ const TIME_BUCKET_SIZE_MS = 60 * 60 * 1000 // 1 hour
 
 // Initialize time series buckets
 function initTimeSeriesBuckets() {
-  const now = new Date()
+  const now = Date.now()
   metrics.timeSeriesData = []
   
-  // Align to the current hour to make buckets clean
-  const alignedNow = new Date(now)
-  alignedNow.setMinutes(0, 0, 0) // Set to the beginning of the current hour
-  
   for (let i = TIME_SERIES_BUCKETS - 1; i >= 0; i--) {
-    // Create a timestamp at the start of each hour
-    const bucketTime = new Date(alignedNow.getTime() - (i * TIME_BUCKET_SIZE_MS))
+    const bucketTime = new Date(now - (i * TIME_BUCKET_SIZE_MS))
     metrics.timeSeriesData.push({
       timestamp: bucketTime.toISOString(),
       hour: bucketTime.getHours(),
@@ -85,46 +80,12 @@ function initTimeSeriesBuckets() {
       processCounts: {}
     })
   }
-  
-  _logger('Initialized time series buckets from %s to %s',
-          metrics.timeSeriesData[0].timestamp,
-          metrics.timeSeriesData[metrics.timeSeriesData.length-1].timestamp)
 }
 
 // Initialize time series data
 initTimeSeriesBuckets()
 
-// Force reset time series data before loading from disk to ensure clean state
-function forceResetTimeSeriesData() {
-  _logger('FORCING RESET of all time series data to fix timestamp issues');
-  metrics.timeSeriesData = [];
-  initTimeSeriesBuckets();
-  
-  // Delete existing metrics file to ensure clean state
-  if (isPersistentStorageEnabled) {
-    try {
-      const metricsFilePath = path.join(STORAGE_PATH, 'metrics.json');
-      if (fs.existsSync(metricsFilePath)) {
-        fs.unlinkSync(metricsFilePath);
-        _logger('Deleted old metrics file to ensure fresh start');
-      }
-    } catch (err) {
-      _logger('Error deleting metrics file: %O', err);
-    }
-  }
-}
-
-// Force reset time series data to fix timestamp issues
-forceResetTimeSeriesData();
-
-// Reinitialize with current time
-metrics.startTime = new Date().toISOString();
-metrics.totalRequests = 0;
-metrics.processCounts = {};
-metrics.actionCounts = {};
-
-// Load other metrics from disk if available, BUT NOT time series data
-// (This won't do anything if we successfully deleted the file above)
+// Load persisted metrics if available
 loadMetricsFromDisk()
 
 /**
@@ -176,34 +137,15 @@ function updateTimeSeriesData(processId, timestamp) {
     const requestTime = new Date(timestamp);
     const now = new Date();
     
-    // Calculate how far back this request is from current time
+    // Find the right time bucket for this request
     const timeDiff = now - requestTime;
-    
-    // Skip if the request is older than our tracking window
     if (timeDiff > TIME_SERIES_BUCKETS * TIME_BUCKET_SIZE_MS) {
-      _logger('Request too old for time series tracking: %s', timestamp);
+      // Request is older than our tracking window
       return;
     }
     
-    // Find which hourly bucket this belongs to based on the timestamp
-    // We want to find the most recent bucket that isn't newer than the request
-    let bucketIndex = -1;
-    
-    for (let i = 0; i < metrics.timeSeriesData.length; i++) {
-      const bucketTime = new Date(metrics.timeSeriesData[i].timestamp);
-      if (requestTime >= bucketTime) {
-        bucketIndex = i;
-        break;
-      }
-    }
-    
-    // If no matching bucket found, use the oldest bucket
-    if (bucketIndex === -1) {
-      bucketIndex = metrics.timeSeriesData.length - 1;
-    }
-    
+    const bucketIndex = Math.floor(timeDiff / TIME_BUCKET_SIZE_MS);
     if (bucketIndex < 0 || bucketIndex >= metrics.timeSeriesData.length) {
-      _logger('Unable to find appropriate time bucket for timestamp: %s', timestamp);
       return;
     }
     
@@ -216,9 +158,6 @@ function updateTimeSeriesData(processId, timestamp) {
       bucket.processCounts[processId] = 0;
     }
     bucket.processCounts[processId] += 1;
-    
-    _logger('Added request to time bucket %s (hour %d) with timestamp %s', 
-            bucket.timestamp, bucket.hour, timestamp);
     
   } catch (err) {
     _logger('Error updating time series data: %O', err);
@@ -321,45 +260,21 @@ export function finishTracking(tracking, action) {
  * Refresh time series data by adding a new bucket and removing oldest
  */
 function refreshTimeSeriesData() {
-  try {
-    // Remove oldest bucket
-    if (metrics.timeSeriesData.length >= TIME_SERIES_BUCKETS) {
-      metrics.timeSeriesData.pop();
-    }
-    
-    // Add new bucket for current hour, aligning to the start of the hour
-    const now = new Date();
-    const alignedNow = new Date(now);
-    alignedNow.setMinutes(0, 0, 0); // Set to the beginning of the current hour
-    
-    // Only add a new bucket if we don't already have one for this hour
-    const existingBucketForThisHour = metrics.timeSeriesData.find(bucket => {
-      const bucketDate = new Date(bucket.timestamp);
-      return bucketDate.getHours() === alignedNow.getHours() && 
-             bucketDate.getDate() === alignedNow.getDate() &&
-             bucketDate.getMonth() === alignedNow.getMonth() &&
-             bucketDate.getFullYear() === alignedNow.getFullYear();
-    });
-    
-    if (!existingBucketForThisHour) {
-      metrics.timeSeriesData.unshift({
-        timestamp: alignedNow.toISOString(),
-        hour: alignedNow.getHours(),
-        totalRequests: 0,
-        processCounts: {}
-      });
-      
-      _logger('Added new time bucket for hour %d at %s', 
-              alignedNow.getHours(), alignedNow.toISOString());
-    }
-    
-    _logger('Refreshed time series data - now tracking %d hours from %s to %s', 
-            metrics.timeSeriesData.length,
-            metrics.timeSeriesData[metrics.timeSeriesData.length-1].timestamp,
-            metrics.timeSeriesData[0].timestamp);
-  } catch (err) {
-    _logger('Error refreshing time series data: %O', err);
+  const now = Date.now();
+  const newBucketTime = new Date(now);
+  
+  // Remove oldest bucket
+  if (metrics.timeSeriesData.length >= TIME_SERIES_BUCKETS) {
+    metrics.timeSeriesData.shift();
   }
+  
+  // Add new bucket
+  metrics.timeSeriesData.push({
+    timestamp: newBucketTime.toISOString(),
+    hour: newBucketTime.getHours(),
+    totalRequests: 0,
+    processCounts: {}
+  });
 }
 
 // Refresh time series data every hour
@@ -438,29 +353,7 @@ function loadMetricsFromDisk() {
       const fileContent = fs.readFileSync(metricsFilePath, 'utf8');
       const savedData = JSON.parse(fileContent);
       
-      // Check if the savedData is from today
-      const savedDate = new Date(savedData.savedAt || '');
-      const today = new Date();
-      const isSameDay = savedDate.getDate() === today.getDate() && 
-                      savedDate.getMonth() === today.getMonth() && 
-                      savedDate.getFullYear() === today.getFullYear();
-      
-      if (!isSameDay) {
-        _logger('WARNING: Saved metrics are from a different day (%s). Using current day only.', 
-                savedDate.toISOString());
-        // If data is from a different day, only restore non-time-sensitive metrics
-        metrics.processCounts = {};
-        metrics.actionCounts = {};
-        metrics.processTiming = {};
-        metrics.actionTiming = {};
-        metrics.ipCounts = {};
-        metrics.referrerCounts = {};
-        metrics.totalRequests = 0;
-        // Note: We've already reset and recreated timeSeriesData with forceResetTimeSeriesData()
-        return;
-      }
-      
-      // Merge saved data with current metrics (except time series data)
+      // Merge saved data with current metrics
       metrics.startTime = savedData.startTime || metrics.startTime;
       metrics.totalRequests = savedData.totalRequests || 0;
       metrics.processCounts = savedData.processCounts || {};
@@ -470,9 +363,12 @@ function loadMetricsFromDisk() {
       metrics.ipCounts = savedData.ipCounts || {};
       metrics.referrerCounts = savedData.referrerCounts || {};
       
-      // EXPLICITLY NOT LOADING time series data - we're using the freshly initialized buckets
-      _logger('Loaded general metrics from disk, but using NEW time series data');
-      _logger('Restored %d total historical requests', metrics.totalRequests);
+      // Only load time series data if format matches
+      if (Array.isArray(savedData.timeSeriesData) && savedData.timeSeriesData.length === TIME_SERIES_BUCKETS) {
+        metrics.timeSeriesData = savedData.timeSeriesData;
+      }
+      
+      _logger('Loaded metrics from disk: %d total requests restored', metrics.totalRequests);
     } else {
       _logger('No saved metrics file found, starting with empty metrics');
     }
