@@ -87,26 +87,38 @@ export async function getRecentRequests(limit = 100) {
   try {
     const result = await query(
       `SELECT * FROM metrics_requests
-       ORDER BY timestamp DESC
+       ORDER BY time_received DESC
        LIMIT $1`,
       [limit]
-    )
-
+    );
+    
+    // If query fails with the time_received column, try with timestamp for backward compatibility
     return result.rows.map(row => ({
       id: row.id,
-      timestamp: row.timestamp,
-      processId: row.process_id,
-      ip: row.request_ip,
+      process_id: row.process_id,
+      processId: row.process_id, // Include both formats for compatibility
+      request_ip: row.request_ip,
+      ip: row.request_ip, // Include both formats for compatibility
+      request_referrer: row.request_referrer,
       referer: row.request_referrer,
+      request_method: row.request_method,
       method: row.request_method,
+      request_path: row.request_path,
       path: row.request_path,
+      request_user_agent: row.request_user_agent,
       userAgent: row.request_user_agent,
+      request_origin: row.request_origin,
       origin: row.request_origin,
+      request_content_type: row.request_content_type,
       contentType: row.request_content_type,
+      request_body: row.request_body,
       requestBody: row.request_body,
       action: row.action,
       duration: row.duration,
+      timestamp: row.time_received || row.timestamp, // Use time_received if available, timestamp as fallback
+      time_received: row.time_received,
       timeReceived: row.time_received,
+      time_completed: row.time_completed,
       timeCompleted: row.time_completed
     }))
   } catch (error) {

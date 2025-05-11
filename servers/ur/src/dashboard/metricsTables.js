@@ -3,6 +3,65 @@
  * Generates HTML for recent requests, process metrics, and action metrics tables
  */
 
+/**
+ * Format a timestamp for display in the dashboard
+ * @param {string} timestamp - ISO timestamp string
+ * @returns {string} Formatted timestamp
+ */
+function formatTimestamp(timestamp) {
+  if (!timestamp) return 'Unknown';
+  
+  try {
+    const date = new Date(timestamp);
+    if (isNaN(date.getTime())) return 'Invalid Date';
+    
+    return date.toLocaleString('en-US', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit'
+    });
+  } catch (err) {
+    return 'Unknown';
+  }
+}
+
+/**
+ * Format a JSON object for display in an HTML table
+ * @param {object} jsonObj - The JSON object to format
+ * @returns {string} HTML representation of the object
+ */
+function formatJsonForDisplay(jsonObj) {
+  if (!jsonObj) return 'None';
+  
+  try {
+    // For complex objects, create a collapsible JSON viewer
+    if (typeof jsonObj === 'object' && Object.keys(jsonObj).length > 0) {
+      const formatted = JSON.stringify(jsonObj, null, 2)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;')
+        .replace(/\n/g, '<br>')
+        .replace(/ /g, '&nbsp;');
+        
+      return `
+        <details class="json-viewer">
+          <summary>View JSON</summary>
+          <pre>${formatted}</pre>
+        </details>
+      `;
+    }
+    
+    return 'Empty Object';
+  } catch (err) {
+    return 'Invalid JSON';
+  }
+}
+
 export function generateRecentRequestsTable(recentRequests, requestDetails) {
   // Generate recent requests table with dropdowns for details
   const recentRequestsHtml = recentRequests.map((req, index) => {
@@ -10,38 +69,55 @@ export function generateRecentRequestsTable(recentRequests, requestDetails) {
     const details = requestDetails[req.processId] || [];
     const detail = details.length > 0 ? details[0] : null;
     
+    // Extract the actual request body from the JSONB column if available
+    let requestBodyHtml = 'No body data';
+    if (req.request_body) {
+      const body = typeof req.request_body === 'string' 
+        ? JSON.parse(req.request_body) 
+        : req.request_body;
+      requestBodyHtml = formatJsonForDisplay(body);
+    }
+    
+    // Format the timestamp properly
+    const formattedTimestamp = formatTimestamp(req.time_received || req.timestamp);
+    
     // Create detailed dropdown content
-    const detailsHtml = detail ? `
+    const detailsHtml = `
       <div class="details-content">
         <h4>Request Details</h4>
         <table class="details-table">
-          <tr><td>Method:</td><td>${detail.method || 'N/A'}</td></tr>
-          <tr><td>Path:</td><td>${detail.path || 'N/A'}</td></tr>
-          <tr><td>IP Address:</td><td>${detail.ip || 'N/A'}</td></tr>
-          <tr><td>User Agent:</td><td>${detail.userAgent || 'N/A'}</td></tr>
-          <tr><td>Referrer:</td><td>${detail.referer || 'N/A'}</td></tr>
-          <tr><td>Origin:</td><td>${detail.origin || 'N/A'}</td></tr>
-          <tr><td>Content Type:</td><td>${detail.contentType || 'N/A'}</td></tr>
+          <tr><td>Process ID:</td><td><code>${req.process_id || req.processId || 'N/A'}</code></td></tr>
+          <tr><td>Time Received:</td><td>${formattedTimestamp}</td></tr>
+          <tr><td>Method:</td><td>${req.request_method || detail?.method || 'N/A'}</td></tr>
+          <tr><td>Path:</td><td>${req.request_path || detail?.path || 'N/A'}</td></tr>
+          <tr><td>IP Address:</td><td>${req.request_ip || detail?.ip || 'N/A'}</td></tr>
+          <tr><td>User Agent:</td><td>${req.request_user_agent || detail?.userAgent || 'N/A'}</td></tr>
+          <tr><td>Referrer:</td><td>${req.request_referrer || detail?.referer || 'N/A'}</td></tr>
+          <tr><td>Origin:</td><td>${req.request_origin || detail?.origin || 'N/A'}</td></tr>
+          <tr><td>Content Type:</td><td>${req.request_content_type || detail?.contentType || 'N/A'}</td></tr>
+          <tr><td>Action:</td><td><strong>${req.action || 'N/A'}</strong></td></tr>
+          <tr><td>Duration:</td><td>${req.duration || '0'}ms</td></tr>
+          <tr><td>Request Body:</td><td>${requestBodyHtml}</td></tr>
         </table>
       </div>
-    ` : '<div class="details-content">No additional details available</div>';
+    `;
     
     return `
       <tr>
-        <td>${req.timestamp}</td>
+        <td>${formattedTimestamp}</td>
         <td>
           <details>
-            <summary>${req.processId}</summary>
+            <summary>${(req.process_id || req.processId || '').substring(0, 12)}...</summary>
             <div class="process-details">
               ${detailsHtml}
             </div>
           </details>
         </td>
         <td>${req.action || 'N/A'}</td>
-        <td>${req.ip}</td>
-        <td>${req.duration}ms</td>
+        <td>${req.request_ip || req.ip || 'N/A'}</td>
+        <td>${req.duration || '0'}ms</td>
         <td>
-          <button class="copy-btn" data-id="${req.processId}" title="Copy Process ID">
+          <button class="copy-btn" data-id="${req.process_id || req.processId}" title="Copy Process ID">
             Copy ID
           </button>
         </td>

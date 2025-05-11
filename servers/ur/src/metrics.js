@@ -26,24 +26,61 @@ initializeDatabase()
  */
 export function extractAction(body) {
   try {
-    // Parse the body if it's a string
-    const parsedBody = typeof body === 'string' ? JSON.parse(body) : body
+    // Handle null or undefined body
+    if (!body) return null;
     
-    // Check for Tags array with Action
+    // Parse the body if it's a string
+    const parsedBody = typeof body === 'string' ? JSON.parse(body) : body;
+    
+    // Case 1: Check for Tags array with Action (common AO format)
     if (parsedBody?.Tags && Array.isArray(parsedBody.Tags)) {
       const actionTag = parsedBody.Tags.find(tag => 
         tag.name === 'Action' || tag.Name === 'Action'
-      )
+      );
       
       if (actionTag) {
-        return actionTag.value || actionTag.Value
+        return actionTag.value || actionTag.Value || null;
       }
     }
     
-    return null
+    // Case 2: Check for direct 'Action' property
+    if (parsedBody?.Action || parsedBody?.action) {
+      return parsedBody.Action || parsedBody.action;
+    }
+    
+    // Case 3: Check for Data.Action pattern
+    if (parsedBody?.Data?.Action || parsedBody?.data?.action) {
+      return parsedBody.Data?.Action || parsedBody.data?.action;
+    }
+    
+    // Case 4: Check in Input field (sometimes used in AO processes)
+    if (parsedBody?.Input?.Action || parsedBody?.input?.action) {
+      return parsedBody.Input?.Action || parsedBody.input?.action;
+    }
+    
+    // Case 5: Look for function property which is often the action
+    if (parsedBody?.function) {
+      return parsedBody.function;
+    }
+    
+    // Case 6: If Tags exist but no specific Action tag, use first Tag's name as action
+    if (parsedBody?.Tags && Array.isArray(parsedBody.Tags) && parsedBody.Tags.length > 0) {
+      const firstTag = parsedBody.Tags[0];
+      return firstTag.name || firstTag.Name || null;
+    }
+    
+    // Last resort: look for any property that might indicate an action
+    const actionIndicators = ['type', 'method', 'op', 'operation', 'command'];
+    for (const indicator of actionIndicators) {
+      if (parsedBody[indicator]) {
+        return parsedBody[indicator];
+      }
+    }
+    
+    return null;
   } catch (err) {
-    _logger('Error extracting action from body: %O', err)
-    return null
+    _logger('Error extracting action from body: %O', err);
+    return null;
   }
 }
 
