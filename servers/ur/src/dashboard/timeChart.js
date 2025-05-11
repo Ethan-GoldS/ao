@@ -9,44 +9,27 @@
 
 /**
  * Generate the traffic overview component HTML
- * @param {Object} timeSeriesData - The time series data from metrics service
- * @returns {String} - HTML for the traffic overview component
+ * @param {Object} timeSeriesData - Time series data from metrics service
+ * @returns {String} HTML for the traffic overview component
  */
 export function generateTrafficOverview(timeSeriesData) {
   // Default settings
   const defaultTimeRange = '6h';
   const defaultInterval = '5min';
   
-  // Calculate preset time ranges from current time
-  const now = new Date();
-  const presetRanges = {
-    '1h': new Date(now.getTime() - 1 * 60 * 60 * 1000),
-    '3h': new Date(now.getTime() - 3 * 60 * 60 * 1000),
-    '6h': new Date(now.getTime() - 6 * 60 * 60 * 1000),
-    '12h': new Date(now.getTime() - 12 * 60 * 60 * 1000),
-    '24h': new Date(now.getTime() - 24 * 60 * 60 * 1000),
-    '3d': new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000)
-  };
-  
-  // Time interval options in seconds
-  const intervals = {
-    '1min': 60,
-    '5min': 300,
-    '30min': 1800,
-    '1h': 3600
-  };
-  
-  // Generate preset buttons HTML
-  const presetButtonsHtml = Object.keys(presetRanges).map(range => {
+  // Generate preset buttons HTML (1h, 3h, 6h, 12h, 24h, 3d)
+  const presetRanges = ['1h', '3h', '6h', '12h', '24h', '3d'];
+  const presetButtonsHtml = presetRanges.map(range => {
     return `<button class="preset-btn${range === defaultTimeRange ? ' active' : ''}" data-range="${range}">${range}</button>`;
   }).join('');
   
-  // Generate interval selector options HTML
-  const intervalOptionsHtml = Object.keys(intervals).map(interval => {
+  // Generate interval selector options HTML (1min, 5min, 30min, 1h)
+  const intervals = ['1min', '5min', '30min', '1h'];
+  const intervalOptionsHtml = intervals.map(interval => {
     return `<option value="${interval}"${interval === defaultInterval ? ' selected' : ''}>${interval}</option>`;
   }).join('');
 
-  // Return the traffic overview HTML with modern design
+  // Generate the traffic overview HTML
   return `
     <div class="traffic-overview">
       <div class="overview-header">
@@ -111,14 +94,20 @@ export function generateTrafficOverview(timeSeriesData) {
 }
 
 /**
- * Get the JavaScript for initializing and updating the traffic charts
- * @param {Object} rawTimeData - The raw time series data
- * @returns {String} - JavaScript code for charts
+ * Get the JavaScript code for the traffic charts
+ * @param {Object} rawTimeData - Raw time series data
+ * @returns {String} JavaScript code for charts
  */
 export function getTrafficChartScript(rawTimeData) {
+  // Pre-serialize the data to avoid template literal issues
+  const serializedData = JSON.stringify(rawTimeData || {});
+  
   return `
     // Initialize charts when the DOM is ready
     document.addEventListener('DOMContentLoaded', function() {
+      // Parse the raw time data
+      const rawTimeData = ${serializedData};
+      
       // Chart objects
       let trafficChart = null;
       let processDistChart = null;
@@ -127,21 +116,23 @@ export function getTrafficChartScript(rawTimeData) {
       let currentRange = '6h';
       let currentInterval = '5min';
       
-      // Initialize the charts with default settings
-      initCharts(currentRange, currentInterval);
+      // Initialize the charts
+      initCharts();
       
-      // Set up event listeners for controls
+      // Set up event listeners for time range buttons
       document.querySelectorAll('.preset-btn').forEach(button => {
         button.addEventListener('click', function() {
           // Remove active class from all buttons
-          document.querySelectorAll('.preset-btn').forEach(btn => btn.classList.remove('active'));
+          document.querySelectorAll('.preset-btn').forEach(btn => {
+            btn.classList.remove('active');
+          });
           
           // Add active class to clicked button
           this.classList.add('active');
           
           // Update current range and refresh charts
           currentRange = this.getAttribute('data-range');
-          updateCharts(currentRange, currentInterval);
+          updateCharts();
         });
       });
       
@@ -150,7 +141,7 @@ export function getTrafficChartScript(rawTimeData) {
       if (intervalSelector) {
         intervalSelector.addEventListener('change', function() {
           currentInterval = this.value;
-          updateCharts(currentRange, currentInterval);
+          updateCharts();
         });
       }
       
@@ -162,9 +153,9 @@ export function getTrafficChartScript(rawTimeData) {
           this.textContent = '⟳ Loading...';
           this.disabled = true;
           
-          // In production, this would be an actual API call
+          // Simulate data refresh
           setTimeout(() => {
-            updateCharts(currentRange, currentInterval);
+            updateCharts();
             document.getElementById('last-updated-time').textContent = new Date().toLocaleString();
             this.textContent = '↻ Refresh';
             this.disabled = false;
@@ -172,11 +163,9 @@ export function getTrafficChartScript(rawTimeData) {
         });
       }
       
-      /**
-       * Initialize charts with the given settings
-       */
-      function initCharts(range, interval) {
-        // Initialize the main traffic chart
+      // Initialize charts
+      function initCharts() {
+        // Initialize main traffic chart
         const trafficCtx = document.getElementById('trafficChart').getContext('2d');
         trafficChart = new Chart(trafficCtx, {
           type: 'line',
@@ -198,7 +187,7 @@ export function getTrafficChartScript(rawTimeData) {
           }
         });
         
-        // Initialize the process distribution chart
+        // Initialize process distribution chart
         const processCtx = document.getElementById('processDistChart').getContext('2d');
         processDistChart = new Chart(processCtx, {
           type: 'bar',
@@ -221,33 +210,62 @@ export function getTrafficChartScript(rawTimeData) {
             maintainAspectRatio: false
           }
         });
+        
+        // Initial update
+        updateCharts();
       }
       
-      /**
-       * Update charts with new range and interval
-       */
-      function updateCharts(range, interval) {
-        // In a real implementation, this would fetch data based on range and interval
-        console.log('Updating charts with range: ' + range + ', interval: ' + interval);
-        
-        // For demo purposes, we'll just update with random data
-        const labels = [];
-        const data = [];
-        
+      // Update charts based on selected range and interval
+      function updateCharts() {
         // Generate random data points based on the range
-        const points = range.includes('h') ? parseInt(range) : (range.includes('d') ? parseInt(range) * 24 : 6);
-        
-        for (let i = 0; i < points; i++) {
-          labels.push(i + ':00');
-          data.push(Math.floor(Math.random() * 50));
-        }
+        const points = getPointsForRange(currentRange);
+        const labels = generateTimeLabels(points);
+        const data = generateRandomData(points);
         
         // Update traffic chart
         trafficChart.data.labels = labels;
         trafficChart.data.datasets[0].data = data;
         trafficChart.update();
         
-        // Update process distribution chart with random data
+        // Update process distribution chart
+        updateProcessChart();
+        
+        // Update summary statistics
+        updateStats(data);
+      }
+      
+      // Get number of data points for selected range
+      function getPointsForRange(range) {
+        const value = parseInt(range);
+        if (range.includes('h')) {
+          return value;
+        } else if (range.includes('d')) {
+          return value * 24;
+        } else {
+          return 6; // Default
+        }
+      }
+      
+      // Generate time labels
+      function generateTimeLabels(count) {
+        const labels = [];
+        for (let i = 0; i < count; i++) {
+          labels.push(i + ':00');
+        }
+        return labels;
+      }
+      
+      // Generate random data
+      function generateRandomData(count) {
+        const data = [];
+        for (let i = 0; i < count; i++) {
+          data.push(Math.floor(Math.random() * 50));
+        }
+        return data;
+      }
+      
+      // Update process distribution chart
+      function updateProcessChart() {
         const processLabels = [];
         const processData = [];
         
@@ -259,9 +277,12 @@ export function getTrafficChartScript(rawTimeData) {
         processDistChart.data.labels = processLabels;
         processDistChart.data.datasets[0].data = processData;
         processDistChart.update();
-        
-        // Update summary statistics
-        document.getElementById('total-requests').textContent = data.reduce((a, b) => a + b, 0);
+      }
+      
+      // Update summary statistics
+      function updateStats(data) {
+        const total = data.reduce((a, b) => a + b, 0);
+        document.getElementById('total-requests').textContent = total;
         document.getElementById('avg-duration').textContent = Math.floor(Math.random() * 500) + 'ms';
         document.getElementById('reqs-per-min').textContent = Math.floor(Math.random() * 10);
         document.getElementById('active-processes').textContent = 5;
@@ -269,10 +290,12 @@ export function getTrafficChartScript(rawTimeData) {
     });
   `;
 }
-  `;
-}
 
-// JavaScript for time chart functionality - to be included in the dashboard JS section
+/**
+ * Alternative time chart functionality - for more detailed time series analysis
+ * @param {Object} rawTimeData - Raw time series data
+ * @returns {String} JavaScript code for charts
+ */
 export function getTimeChartScript(rawTimeData) {
   return `
     // Store the raw time series data for flexible filtering
