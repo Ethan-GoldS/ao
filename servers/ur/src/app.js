@@ -4,8 +4,6 @@ import { pipe } from 'ramda'
 
 import { config } from './config.js'
 import { logger } from './logger.js'
-import { metricsMiddleware } from './metrics.js'
-import { generateDashboardHtml } from './dashboard.js'
 
 import { proxyWith } from './proxy.js'
 import { redirectWith } from './redirect.js'
@@ -19,13 +17,7 @@ const middlewareWith = middlewareWithByStrategy[config.strategy]
 
 pipe(
   (app) => app.use(cors()),
-  (app) => app.use(express.json({ strict: false })),
-  (app) => app.use(metricsMiddleware()),
   (app) => app.get('/healthcheck', (req, res) => res.status(200).send('OK')),
-  (app) => app.get('/dashboard', (req, res) => {
-    res.setHeader('Content-Type', 'text/html')
-    res.status(200).send(generateDashboardHtml())
-  }),
   middlewareWith({ ...config }),
   (app) => {
     const server = app.listen(config.port, () => {
