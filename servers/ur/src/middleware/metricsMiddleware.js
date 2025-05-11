@@ -302,6 +302,25 @@ export function metricsMiddleware() {
           }
         }
         
+        // Extract action from request body if possible
+        if (!action && requestBodyData) {
+          try {
+            // Try to extract action from Tags in the request body
+            if (requestBodyData.Tags && Array.isArray(requestBodyData.Tags)) {
+              const actionTag = requestBodyData.Tags.find(tag => 
+                (tag.name === 'Action' || tag.Name === 'Action') ||
+                (tag.name?.toLowerCase() === 'action' || tag.Name?.toLowerCase() === 'action')
+              );
+              if (actionTag) {
+                action = actionTag.value || actionTag.Value;
+                _logger('Successfully extracted action %s from request body Tags', action);
+              }
+            }
+          } catch (e) {
+            _logger('Error extracting action from request body: %s', e.message);
+          }
+        }
+        
         // Create a comprehensive metadata record with everything we know
         const metadataRecord = {
           ...tracking,

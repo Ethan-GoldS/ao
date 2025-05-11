@@ -161,13 +161,25 @@ export function startTracking(req) {
  * @param {String} action Action from request
  */
 export function finishTracking(tracking, action) {
-  if (!tracking || !tracking.startTime) return;
+  if (!tracking || !tracking.startTime) {
+    _logger('Skipping metrics for invalid tracking data');
+    return;
+  }
   
-  const duration = tracking.duration || (Date.now() - tracking.startTime);
+  let duration = tracking.duration || (Date.now() - tracking.startTime);
+  // Ensure we never have a 0ms duration - this indicates a timing issue
+  if (duration <= 0) {
+    _logger('Detected 0ms duration, setting to minimum of 1ms');
+    duration = 1; // Minimum duration of 1ms to avoid confusion
+  }
+  
   const timeCompleted = new Date().toISOString();
   const { processId } = tracking;
   
-  if (!processId) return;
+  if (!processId) {
+    _logger('Skipping metrics for missing processId');
+    return;
+  }
   
   // Create a complete metrics record
   const metricsRecord = {
