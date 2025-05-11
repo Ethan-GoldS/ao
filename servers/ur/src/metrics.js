@@ -171,13 +171,25 @@ function updateTimeSeriesData(processId, timestamp) {
  */
 export function extractAction(body) {
   try {
-    if (!body || !body.Tags) return null;
+    if (!body) return null;
     
-    const actionTag = body.Tags.find(tag => 
-      tag.name === 'Action' || tag.name === 'action'
-    );
+    // Case 1: AO protocol format with Tags array of objects with name/value pairs
+    if (Array.isArray(body.Tags)) {
+      const actionTag = body.Tags.find(tag => 
+        tag.name === 'Action' || tag.name === 'action'
+      );
+      if (actionTag && actionTag.value) return actionTag.value;
+    }
     
-    return actionTag ? actionTag.value : null;
+    // Case 2: Body with 'action' property
+    if (body.action) return body.action;
+    
+    // Case 3: Body with tags object that contains Action property
+    if (body.tags && (body.tags.Action || body.tags.action)) {
+      return body.tags.Action || body.tags.action;
+    }
+    
+    return null;
   } catch (err) {
     _logger('Error extracting action from request body: %O', err);
     return null;

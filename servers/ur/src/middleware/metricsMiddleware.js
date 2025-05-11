@@ -60,11 +60,23 @@ export function metricsMiddleware() {
     // Store request details for dashboard
     recordRequestDetails(requestDetails);
     
+    // Try to extract action from request body (if it exists)
+    let action = null;
+    if (req.body) {
+      action = extractAction(req.body);
+    }
+    
+    // Store the action in requestDetails if available
+    if (action) {
+      requestDetails.action = action;
+    }
+    
     // Start tracking request for performance metrics
     const tracking = {
       startTime: Date.now(),
       processId,
-      ip: clientIp
+      ip: clientIp,
+      action // Store extracted action in tracking object
     };
     
     // Capture original end method to intercept when response is sent
@@ -76,21 +88,17 @@ export function metricsMiddleware() {
         // Measure request duration
         const duration = Date.now() - tracking.startTime;
         
-        // Get raw action from response data if possible (advanced attempt)
-        let action = null;
-        try {
-          // Try to get action from response, if it contains a successfully processed request
-          if (args[0] && typeof args[0] === 'string' && args[0].includes('"Action"')) {
-            const responseData = JSON.parse(args[0]);
-            if (responseData.Tags) {
-              const actionTag = responseData.Tags.find(tag => 
-                tag.name === 'Action' || tag.name === 'action'
-              );
-              if (actionTag) action = actionTag.value;
+        // If we haven't found an action yet, try to get it from response data
+        if (!action && args[0] && typeof args[0] === 'string') {
+          try {
+            // Parse response JSON if possible
+            if (args[0].includes('"Action"') || args[0].includes('"Tags"')) {
+              const responseData = JSON.parse(args[0]);
+              action = extractAction(responseData);
             }
+          } catch (e) {
+            // Silent catch - don't affect proxy
           }
-        } catch (e) {
-          // Silent catch - don't affect proxy
         }
         
         // Update metrics with duration

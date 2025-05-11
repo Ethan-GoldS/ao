@@ -399,7 +399,7 @@ function generateDashboardHtml() {
           <div class="stat-label">Different Actions</div>
         </div>
         <div class="stat-box">
-          <div class="stat-number">${metrics.ipCounts.length}</div>
+          <div class="stat-number">{{metrics.ipCounts.length}}</div>
           <div class="stat-label">Unique IPs</div>
         </div>
       </div>
@@ -899,18 +899,18 @@ function generateDashboardHtml() {
             
             switch(timeRange.interval) {
               case 'minute':
-                label = `${date.getHours()}:${date.getMinutes().toString().padStart(2, '0')}`;
+                label = date.getHours() + ':' + date.getMinutes().toString().padStart(2, '0');
                 break;
               case '5minute':
               case '15minute':
               case '30minute':
-                label = `${date.getHours()}:${date.getMinutes().toString().padStart(2, '0')}`;
+                label = date.getHours() + ':' + date.getMinutes().toString().padStart(2, '0');
                 break;
               case 'hour':
-                label = `${date.getHours()}:00`;
+                label = date.getHours() + ':00';
                 break;
               case 'day':
-                label = `${date.getMonth()+1}/${date.getDate()}`;
+                label = (date.getMonth()+1) + '/' + date.getDate();
                 break;
               default:
                 label = date.toLocaleTimeString();
@@ -1023,42 +1023,42 @@ function generateDashboardHtml() {
             const detail = details.length > 0 ? details[0] : null;
             
             // Create dropdown HTML similar to original
-            const detailsHtml = detail ? `
+            const detailsHtml = detail ? '
               <div class="details-content">
                 <h4>Request Details</h4>
                 <table class="details-table">
-                  <tr><td>Method:</td><td>${detail.method || 'N/A'}</td></tr>
-                  <tr><td>Path:</td><td>${detail.path || 'N/A'}</td></tr>
-                  <tr><td>IP Address:</td><td>${detail.ip || 'N/A'}</td></tr>
-                  <tr><td>User Agent:</td><td>${detail.userAgent || 'N/A'}</td></tr>
-                  <tr><td>Referrer:</td><td>${detail.referer || 'N/A'}</td></tr>
-                  <tr><td>Origin:</td><td>${detail.origin || 'N/A'}</td></tr>
-                  <tr><td>Content Type:</td><td>${detail.contentType || 'N/A'}</td></tr>
+                  <tr><td>Method:</td><td>' + (detail.method || 'N/A') + '</td></tr>
+                  <tr><td>Path:</td><td>' + (detail.path || 'N/A') + '</td></tr>
+                  <tr><td>IP Address:</td><td>' + (detail.ip || 'N/A') + '</td></tr>
+                  <tr><td>User Agent:</td><td>' + (detail.userAgent || 'N/A') + '</td></tr>
+                  <tr><td>Referrer:</td><td>' + (detail.referer || 'N/A') + '</td></tr>
+                  <tr><td>Origin:</td><td>' + (detail.origin || 'N/A') + '</td></tr>
+                  <tr><td>Content Type:</td><td>' + (detail.contentType || 'N/A') + '</td></tr>
                 </table>
               </div>
-            ` : '<div class="details-content">No additional details available</div>';
+            ' : '<div class="details-content">No additional details available</div>';
             
-            return `
+            return '
               <tr>
-                <td>${req.timestamp}</td>
+                <td>' + req.timestamp + '</td>
                 <td>
                   <details>
-                    <summary>${req.processId}</summary>
+                    <summary>' + req.processId + '</summary>
                     <div class="process-details">
-                      ${detailsHtml}
+                      ' + detailsHtml + '
                     </div>
                   </details>
                 </td>
-                <td>${req.action || 'N/A'}</td>
-                <td>${req.ip}</td>
-                <td>${req.duration}ms</td>
+                <td>' + (req.action || 'N/A') + '</td>
+                <td>' + req.ip + '</td>
+                <td>' + req.duration + 'ms</td>
                 <td>
-                  <button class="copy-btn" data-id="${req.processId}" title="Copy Process ID">
+                  <button class="copy-btn" data-id="' + req.processId + '" title="Copy Process ID">
                     Copy ID
                   </button>
                 </td>
               </tr>
-            `;
+            ';
           }).join('');
           
           // Update table content
@@ -1077,26 +1077,26 @@ function generateDashboardHtml() {
             .sort((a, b) => b[1] - a[1]) // Sort by count descending
             .map(([processId, count]) => {
               const timing = allMetricsData.processTiming?.[processId] || { avgDuration: 0 };
-              return `
+              return '
                 <tr>
                   <td>
                     <details>
-                      <summary>${processId}</summary>
+                      <summary>' + processId + '</summary>
                       <div class="process-details">
                         <h4>Process Request History</h4>
                         <p>Historical data available in chart above</p>
                       </div>
                     </details>
                   </td>
-                  <td>${count}</td>
-                  <td>${timing.avgDuration?.toFixed(2) || '0.00'}ms</td>
+                  <td>' + count + '</td>
+                  <td>' + (timing.avgDuration ? timing.avgDuration.toFixed(2) : '0.00') + 'ms</td>
                   <td>
-                    <button class="copy-btn" data-id="${processId}" title="Copy Process ID">
+                    <button class="copy-btn" data-id="' + processId + '" title="Copy Process ID">
                       Copy ID
                     </button>
                   </td>
                 </tr>
-              `;
+              ';
             }).join('');
             
           // Update table
@@ -1115,13 +1115,13 @@ function generateDashboardHtml() {
             .sort((a, b) => b[1] - a[1]) // Sort by count descending
             .map(([action, count]) => {
               const timing = allMetricsData.actionTiming?.[action] || { avgDuration: 0 };
-              return `
-                <tr class="action-row" data-action="${action}">
-                  <td>${action}</td>
-                  <td>${count}</td>
-                  <td>${timing.avgDuration?.toFixed(2) || '0.00'}ms</td>
+              return '
+                <tr class="action-row" data-action="' + action + '">
+                  <td>' + action + '</td>
+                  <td>' + count + '</td>
+                  <td>' + (timing.avgDuration ? timing.avgDuration.toFixed(2) : '0.00') + 'ms</td>
                 </tr>
-              `;
+              ';
             }).join('');
           
           // Update table
@@ -1133,12 +1133,12 @@ function generateDashboardHtml() {
           const ipTbody = document.querySelector('#clients-tab .card:first-child tbody');
           if (ipTbody && allMetricsData.ipCounts) {
             const ipMetricsHtml = allMetricsData.ipCounts
-              .map(([ip, count]) => `
+              .map(([ip, count]) => '
                 <tr>
-                  <td>${ip}</td>
-                  <td>${count}</td>
+                  <td>' + ip + '</td>
+                  <td>' + count + '</td>
                 </tr>
-              `).join('');
+              ').join('');
               
             ipTbody.innerHTML = ipMetricsHtml || '<tr><td colspan="2">No IP metrics recorded yet</td></tr>';
           }
@@ -1147,12 +1147,12 @@ function generateDashboardHtml() {
           const refTbody = document.querySelector('#clients-tab .card:last-child tbody');
           if (refTbody && allMetricsData.referrerCounts) {
             const referrerMetricsHtml = allMetricsData.referrerCounts
-              .map(([referrer, count]) => `
+              .map(([referrer, count]) => '
                 <tr>
-                  <td>${referrer}</td>
-                  <td>${count}</td>
+                  <td>' + referrer + '</td>
+                  <td>' + count + '</td>
                 </tr>
-              `).join('');
+              ').join('');
               
             refTbody.innerHTML = referrerMetricsHtml || '<tr><td colspan="2">No referrer metrics recorded yet</td></tr>';
           }
