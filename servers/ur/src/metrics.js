@@ -174,7 +174,11 @@ export function finishTracking(tracking, action) {
     ...tracking,
     action,
     duration,
-    timeCompleted
+    timeCompleted,
+    // Ensure raw body is included in metrics record
+    rawBody: tracking.rawBody || null,
+    // Include response data if available
+    responseBody: tracking.responseBody || null
   };
   
   // Store metrics in PostgreSQL

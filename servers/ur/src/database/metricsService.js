@@ -30,6 +30,7 @@ export async function storeMetrics(details) {
       contentType,
       requestBody,
       rawBody,
+      responseBody, // Add response body handling
       action,
       duration,
       timeReceived,
@@ -47,12 +48,44 @@ export async function storeMetrics(details) {
       }
     }
 
+    // Here we're making sure raw body is a string and properly formatted for DB storage
+    let rawBodyForStorage = null;
+    if (rawBody) {
+      if (typeof rawBody === 'string') {
+        rawBodyForStorage = rawBody;
+      } else {
+        try {
+          rawBodyForStorage = JSON.stringify(rawBody);
+        } catch (e) {
+          _logger('Failed to stringify raw body: %s', e.message);
+          // Use string representation as fallback
+          rawBodyForStorage = String(rawBody);
+        }
+      }
+    }
+
+    // Store response body too if available
+    let responseBodyForStorage = null;
+    if (responseBody) {
+      if (typeof responseBody === 'string') {
+        responseBodyForStorage = responseBody;
+      } else {
+        try {
+          responseBodyForStorage = JSON.stringify(responseBody);
+        } catch (e) {
+          _logger('Failed to stringify response body: %s', e.message);
+          responseBodyForStorage = String(responseBody);
+        }
+      }
+    }
+    
+    // Check if table has request_raw column before inserting
     const result = await query(
       `INSERT INTO metrics_requests (
         process_id, request_ip, request_referrer, request_method, 
         request_path, request_user_agent, request_origin, request_content_type,
-        request_body, request_raw, action, duration, time_received, time_completed
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+        request_body, request_raw, response_body, action, duration, time_received, time_completed
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
       RETURNING id`,
       [
         processId,
@@ -64,7 +97,8 @@ export async function storeMetrics(details) {
         origin || 'unknown',
         contentType || 'unknown',
         parsedBody ? JSON.stringify(parsedBody) : null,
-        rawBody || (typeof requestBody === 'string' ? requestBody : JSON.stringify(requestBody)),
+        rawBodyForStorage, // Use prepared raw body value
+        responseBodyForStorage, // Add response body
         action || 'unknown',
         duration || 0,
         timeReceived ? new Date(timeReceived) : new Date(),

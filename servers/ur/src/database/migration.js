@@ -54,11 +54,13 @@ export async function runMigrations() {
     const hasTimeReceived = await columnExists('metrics_requests', 'time_received')
     const hasTimestamp = await columnExists('metrics_requests', 'timestamp')
     const hasRequestRaw = await columnExists('metrics_requests', 'request_raw')
+    const hasResponseBody = await columnExists('metrics_requests', 'response_body')
     
-    _logger('Column status - time_received: %s, timestamp: %s, request_raw: %s', 
+    _logger('Column status - time_received: %s, timestamp: %s, request_raw: %s, response_body: %s', 
       hasTimeReceived ? 'exists' : 'missing',
       hasTimestamp ? 'exists' : 'missing',
-      hasRequestRaw ? 'exists' : 'missing')
+      hasRequestRaw ? 'exists' : 'missing',
+      hasResponseBody ? 'exists' : 'missing')
     
     // Add time_received column if it doesn't exist
     if (!hasTimeReceived) {
@@ -102,6 +104,16 @@ export async function runMigrations() {
         ADD COLUMN request_raw TEXT
       `)
       _logger('request_raw column added successfully')
+    }
+    
+    // Add response_body column if it doesn't exist
+    if (!hasResponseBody) {
+      _logger('Adding response_body column to metrics_requests table')
+      await query(`
+        ALTER TABLE metrics_requests 
+        ADD COLUMN response_body TEXT
+      `)
+      _logger('response_body column added successfully')
     }
     
     _logger('Database migrations completed successfully')

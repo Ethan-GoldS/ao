@@ -81,10 +81,46 @@ export function generateRecentRequestsTable(recentRequests, requestDetails) {
     // Format the raw request data if available
     let rawRequestHtml = 'No raw data available';
     if (req.request_raw || req.rawBody) {
-      const rawData = req.request_raw || req.rawBody;
-      rawRequestHtml = formatJsonForDisplay({
-        raw: rawData
-      });
+      try {
+        const rawData = req.request_raw || req.rawBody;
+        let parsedRaw = rawData;
+        
+        // Try to parse the raw data if it's a string
+        if (typeof rawData === 'string' && rawData.trim().startsWith('{')) {
+          try {
+            parsedRaw = JSON.parse(rawData);
+          } catch (e) {
+            // Keep as string if parsing fails
+            parsedRaw = rawData;
+          }
+        }
+        
+        rawRequestHtml = formatJsonForDisplay(parsedRaw);
+      } catch (err) {
+        rawRequestHtml = `<pre>${(req.request_raw || req.rawBody || '').substr(0, 1000)}</pre>`;
+      }
+    }
+    
+    // Format the response body if available
+    let responseBodyHtml = 'No response data available';
+    if (req.response_body) {
+      try {
+        let parsedResponse = req.response_body;
+        
+        // Try to parse the response data if it's a string
+        if (typeof req.response_body === 'string' && req.response_body.trim().startsWith('{')) {
+          try {
+            parsedResponse = JSON.parse(req.response_body);
+          } catch (e) {
+            // Keep as string if parsing fails
+            parsedResponse = req.response_body;
+          }
+        }
+        
+        responseBodyHtml = formatJsonForDisplay(parsedResponse);
+      } catch (err) {
+        responseBodyHtml = `<pre>${(req.response_body || '').substr(0, 1000)}</pre>`;
+      }
     }
     
     // Format the timestamp properly
@@ -108,6 +144,7 @@ export function generateRecentRequestsTable(recentRequests, requestDetails) {
           <tr><td>Duration:</td><td>${req.duration || '0'}ms</td></tr>
           <tr><td>Request Body:</td><td>${requestBodyHtml}</td></tr>
           <tr><td>Raw Request:</td><td>${rawRequestHtml}</td></tr>
+          <tr><td>Response Body:</td><td>${responseBodyHtml}</td></tr>
         </table>
       </div>
     `;

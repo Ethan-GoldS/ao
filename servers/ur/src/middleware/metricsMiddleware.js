@@ -44,6 +44,22 @@ export function metricsMiddleware() {
     // Get proper client IP
     const clientIp = getClientIp(req);
     
+    // Safely capture raw request data
+    let rawRequestData = null;
+    try {
+      // Create a copy of important request data for metrics
+      rawRequestData = JSON.stringify({
+        headers: req.headers,
+        method: req.method,
+        url: req.url,
+        query: req.query,
+        // Don't directly access req.body as it breaks proxy
+        timestamp: new Date().toISOString()
+      });
+    } catch (err) {
+      _logger('Error capturing raw request data: %O', err);
+    }
+    
     // Record basic request details immediately (without parsing body)
     const requestDetails = {
       timestamp: new Date().toISOString(),
@@ -54,7 +70,8 @@ export function metricsMiddleware() {
       referer: req.headers.referer || req.headers.referrer || 'unknown',
       userAgent: req.headers['user-agent'] || 'unknown',
       origin: req.headers.origin || 'unknown',
-      contentType: req.headers['content-type'] || 'unknown'
+      contentType: req.headers['content-type'] || 'unknown',
+      rawBody: rawRequestData // Store raw request data
     };
     
     // Store request details for dashboard
@@ -64,7 +81,8 @@ export function metricsMiddleware() {
     const tracking = {
       startTime: Date.now(),
       processId,
-      ip: clientIp
+      ip: clientIp,
+      rawBody: rawRequestData // Include raw request data in tracking
     };
     
     // Capture original end method to intercept when response is sent
@@ -93,11 +111,22 @@ export function metricsMiddleware() {
           // Silent catch - don't affect proxy
         }
         
-        // Update metrics with duration
+        // Attempt to capture request body from args if available
+        let requestBody = null;
+        
+        if (args[0] && typeof args[0] === 'string') {
+          // Try to capture the body for metrics
+          requestBody = args[0];
+        }
+        
+        // Update metrics with duration and captured body
         finishTracking({
           ...tracking,
           processId, // Ensure processId is correctly passed
-          duration
+          duration,
+          rawBody: tracking.rawBody || null,
+          // Add the response body if we have it
+          responseBody: requestBody
         }, action);
       } catch (err) {
         // Never let metrics collection affect the actual response
