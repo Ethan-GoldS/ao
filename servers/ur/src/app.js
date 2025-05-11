@@ -11,6 +11,7 @@ import { metricsMiddleware } from './middleware/metricsMiddleware.js'
 import { mountDashboard } from './routes/dashboard.js'
 import diagnosticsRoutes from './routes/diagnostics.js'
 import dataDebugRoutes from './routes/dataDebug.js'
+import simpleDashboardRoutes from './routes/simpleDashboard.js'
 
 const middlewareWithByStrategy = {
   proxy: proxyWith,
@@ -39,6 +40,10 @@ pipe(
     // Mount data debug route for dashboard troubleshooting
     app.use('/data-debug', dataDebugRoutes)
     logger('Data debug route mounted at /data-debug')
+    
+    // Mount simple dashboard that directly uses PostgreSQL data
+    app.use('/simple-dashboard', simpleDashboardRoutes)
+    logger('Simple dashboard mounted at /simple-dashboard')
     
     return app
   },
