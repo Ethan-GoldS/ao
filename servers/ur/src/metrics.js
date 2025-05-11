@@ -20,24 +20,65 @@ const STORAGE_INTERVAL_MS = (parseInt(process.env.METRICS_SAVE_INTERVAL) || 60) 
 const isPersistentStorageEnabled = !!STORAGE_PATH
 const usePostgres = config.usePostgres && !!config.dbUrl
 
+// CRITICAL STARTUP CHECK: Output detailed configuration information
+console.log('===== METRICS STORAGE CONFIGURATION =====')
+console.log(`USE_POSTGRES = ${process.env.USE_POSTGRES || 'not set'}`)
+console.log(`DB_URL = ${process.env.DB_URL ? (process.env.DB_URL.replace(/:\/\/[^:]+:[^@]+@/, '://****:****@')) : 'not set'}`)
+console.log(`METRICS_STORAGE_PATH = ${process.env.METRICS_STORAGE_PATH || 'not set'}`)
+console.log(`Configuration decision: ${usePostgres ? 'USING POSTGRES' : (isPersistentStorageEnabled ? 'USING FILE STORAGE' : 'IN-MEMORY ONLY')}`)
+console.log('=======================================')
+
 // Initialize database if enabled
 if (usePostgres) {
-  _logger('PostgreSQL metrics storage enabled. Will initialize connection...')
+  console.log('ATTEMPTING POSTGRES CONNECTION...')
+  _logger('Explicitly attempting PostgreSQL connection with config:')
+  _logger('usePostgres=%s, dbUrl=%s', config.usePostgres, config.dbUrl ? 'provided' : 'missing')
+  
+  // Check for common configuration issues
+  if (process.env.USE_POSTGRES !== 'true') {
+    const errorMsg = 'ERROR: USE_POSTGRES must be exactly "true" (string), not just truthy. Current value: ' + process.env.USE_POSTGRES
+    console.error(errorMsg)
+    _logger(errorMsg)
+    // Intentionally crash the server with a clear message
+    throw new Error(errorMsg)
+  }
+  
+  if (!process.env.DB_URL) {
+    const errorMsg = 'ERROR: DB_URL must be provided when USE_POSTGRES=true'
+    console.error(errorMsg)
+    _logger(errorMsg)
+    // Intentionally crash the server with a clear message
+    throw new Error(errorMsg)
+  }
+  
   db.initDatabase().then(success => {
     if (success) {
       _logger('PostgreSQL metrics storage initialized successfully')
+      console.log('SUCCESS: PostgreSQL metrics storage initialized')
       
       // Load metrics from database into memory on startup
       loadMetricsFromDatabase().then(loaded => {
         if (loaded) {
           _logger('Successfully loaded metrics from PostgreSQL database')
+          console.log('SUCCESS: Loaded metrics from PostgreSQL database')
         } else {
           _logger('Failed to load metrics from PostgreSQL, using empty metrics')
+          console.error('WARNING: Failed to load metrics from PostgreSQL, using empty metrics')
         }
       })
     } else {
-      _logger('Failed to initialize PostgreSQL metrics storage')
+      const errorMsg = 'FATAL ERROR: Failed to initialize PostgreSQL metrics storage; check database connection and permissions'
+      _logger(errorMsg)
+      console.error(errorMsg)
+      // Intentionally crash with clear message
+      throw new Error(errorMsg)
     }
+  }).catch(err => {
+    const errorMsg = `FATAL DATABASE ERROR: ${err.message}`
+    _logger(errorMsg)
+    console.error(errorMsg)
+    // Intentionally crash with clear message
+    throw err
   })
 } else if (isPersistentStorageEnabled) {
   _logger('File-based metrics storage enabled at: %s', STORAGE_PATH)

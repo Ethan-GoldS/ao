@@ -34,21 +34,21 @@ export async function initDatabase() {
       _logger('POSTGRES: Connected to admin database to check/create metrics database')
       console.log('POSTGRES: Connected to admin database to check/create metrics database')
       
-      // Check if our database exists
+      // The ur_metrics database already exists - we'll validate it
+      _logger('POSTGRES: Checking if ur_metrics database exists')
+      console.log('POSTGRES: Checking if ur_metrics database exists')
+      
       const dbCheckResult = await adminClient.query(
         "SELECT 1 FROM pg_database WHERE datname = 'ur_metrics'"
       )
       
-      // Create the database if it doesn't exist
-      if (dbCheckResult.rows.length === 0) {
-        _logger('POSTGRES: Creating dedicated ur_metrics database')
-        console.log('POSTGRES: Creating dedicated ur_metrics database')
-        await adminClient.query('CREATE DATABASE ur_metrics')
-        _logger('POSTGRES: Created new ur_metrics database successfully')
-        console.log('POSTGRES: Created new ur_metrics database successfully')
+      if (dbCheckResult.rows.length > 0) {
+        _logger('POSTGRES: Confirmed ur_metrics database exists')
+        console.log('POSTGRES: Confirmed ur_metrics database exists')
       } else {
-        _logger('POSTGRES: ur_metrics database already exists')
-        console.log('POSTGRES: ur_metrics database already exists')
+        _logger('POSTGRES ERROR: The ur_metrics database does not exist')
+        console.error('POSTGRES ERROR: The ur_metrics database does not exist. Please create it first.')
+        throw new Error('ur_metrics database does not exist - it must be created in AWS RDS console')
       }
       
       adminClient.release()
@@ -59,34 +59,27 @@ export async function initDatabase() {
       await adminPool.end()
     }
     
-    // Now connect to our metrics database
-    // Parse the existing connection string and replace the database name
+    // Connect to the existing ur_metrics database directly
     let dbUrl = config.dbUrl
     
+    // Modify the connection URL to use the ur_metrics database
     try {
-      // More robust approach to modify the connection string
-      let newDbUrl = new URL(dbUrl)
-      newDbUrl.pathname = '/ur_metrics'
-      dbUrl = newDbUrl.toString()
-      _logger('POSTGRES: Modified connection URL to use ur_metrics database')
-      console.log('POSTGRES: Modified connection URL to use ur_metrics database')
+      // Parse the URL and change the database name
+      const parsedUrl = new URL(dbUrl)
+      parsedUrl.pathname = '/ur_metrics'
+      dbUrl = parsedUrl.toString()
+      _logger('POSTGRES: Modified URL to connect to ur_metrics database')
+      console.log('POSTGRES: Modified URL to connect to ur_metrics database')
     } catch (err) {
-      // Fallback approach for connection strings that might not be valid URLs
+      // Fallback to string replacement
       if (dbUrl.includes('/postgres')) {
         dbUrl = dbUrl.replace('/postgres', '/ur_metrics')
-      } else if (!dbUrl.includes('/ur_metrics')) {
-        // If no database specified, add ur_metrics
-        const parts = dbUrl.split('@')
-        if (parts.length > 1) {
-          const hostPart = parts[1].split('/')
-          if (hostPart.length === 1) {
-            // No path component, add database
-            dbUrl = `${dbUrl}/ur_metrics`
-          }
-        }
+        _logger('POSTGRES: Changed connection string to use ur_metrics database')
+        console.log('POSTGRES: Changed connection string to use ur_metrics database')
+      } else {
+        _logger('POSTGRES ERROR: Could not modify connection URL')
+        console.error('POSTGRES ERROR: Could not modify connection URL:', err.message)
       }
-      _logger('POSTGRES: Used string replacement to set database to ur_metrics')
-      console.log('POSTGRES: Used string replacement to set database to ur_metrics')
     }
     
     _logger('POSTGRES: Connecting to metrics database at %s', dbUrl.replace(/:\/\/[^:]+:[^@]+@/, '://****:****@'))
@@ -188,14 +181,9 @@ async function createTables() {
     // Start transaction
     await client.query('BEGIN')
     
-    // Try to create ur_metrics schema if it doesn't exist
-    try {
-      await client.query('CREATE SCHEMA IF NOT EXISTS ur_metrics')
-      await client.query('SET search_path TO ur_metrics, public')
-      _logger('Created or confirmed ur_metrics schema')
-    } catch (err) {
-      _logger('Could not create ur_metrics schema, using default schema: %s', err.message)
-    }
+    // We're now connected directly to the ur_metrics database, so no schema needed
+    _logger('POSTGRES: Creating tables in ur_metrics database')
+    console.log('POSTGRES: Creating tables in ur_metrics database')
     
     // Create requests table
     await client.query(`
