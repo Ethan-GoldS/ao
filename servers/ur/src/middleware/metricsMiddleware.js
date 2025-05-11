@@ -155,12 +155,24 @@ export function metricsMiddleware() {
     // Store request details for dashboard
     recordRequestDetails(requestDetails);
     
+    // Record the precise start time with high-resolution timer if available
+    const hrstart = process.hrtime ? process.hrtime() : null;
+    const startTimeMs = Date.now();
+    
+    // Log the request start with detailed timing information
+    _logger('Request tracking started for process %s at %d, path: %s, method: %s', 
+      processId, startTimeMs, req.path, req.method);
+    
     // Start tracking request for performance metrics
     const tracking = {
-      startTime: Date.now(),
+      startTime: startTimeMs,
+      hrtimeStart: hrstart, // Track high-resolution time if available
       processId,
       ip: clientIp,
-      rawBody: rawRequestData // Include raw request data in tracking
+      path: req.path, // Include path for better diagnostics
+      method: req.method, // Include method for better diagnostics
+      rawBody: rawRequestData, // Include raw request data in tracking
+      timeCreated: new Date().toISOString() // Exact ISO timestamp for debugging
     };
     
     // Capture original end method to intercept when response is sent
@@ -169,8 +181,38 @@ export function metricsMiddleware() {
     // Override end method to collect metrics before completing the response
     res.end = function(...args) {
       try {
-        // Measure request duration
-        const duration = Date.now() - tracking.startTime;
+        // Record end time with precise timing
+        const endTimeMs = Date.now();
+        
+        // Calculate duration with fallbacks and safeguards
+        let duration = 0;
+        let durationType = 'standard';
+        
+        // First try high-resolution timer for highest accuracy
+        if (tracking.hrtimeStart && process.hrtime) {
+          const hrend = process.hrtime(tracking.hrtimeStart);
+          duration = Math.round((hrend[0] * 1000) + (hrend[1] / 1000000)); // Convert to ms
+          durationType = 'high-resolution';
+        } else {
+          // Fall back to standard Date.now() calculation
+          duration = endTimeMs - tracking.startTime;
+          durationType = 'standard';
+        }
+        
+        // Apply sanity checks on duration
+        if (duration <= 0) {
+          _logger('WARNING: Detected suspicious 0ms duration for %s - forcing minimum duration', tracking.processId);
+          // Force a minimum duration to prevent 0ms entries
+          duration = 1;
+          durationType = 'forced-minimum';
+        } else if (duration > 60000) { // Over 1 minute seems suspect
+          _logger('WARNING: Unusually long duration detected: %dms for %s', duration, tracking.processId);
+          durationType = 'suspiciously-long';
+        }
+        
+        // Log detailed timing information
+        _logger('Request timing for %s: start=%d, end=%d, duration=%dms, type=%s, path=%s', 
+          tracking.processId, tracking.startTime, endTimeMs, duration, durationType, tracking.path);
         
         // Get raw action from response data if possible (advanced attempt)
         let action = null;

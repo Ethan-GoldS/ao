@@ -161,25 +161,55 @@ export function startTracking(req) {
  * @param {String} action Action from request
  */
 export function finishTracking(tracking, action) {
-  if (!tracking || !tracking.startTime) {
-    _logger('Skipping metrics for invalid tracking data');
+  // Enhanced validation with diagnostic logging
+  if (!tracking) {
+    _logger('ERROR: finishTracking called with null tracking object');
     return;
   }
   
-  let duration = tracking.duration || (Date.now() - tracking.startTime);
-  // Ensure we never have a 0ms duration - this indicates a timing issue
-  if (duration <= 0) {
-    _logger('Detected 0ms duration, setting to minimum of 1ms');
-    duration = 1; // Minimum duration of 1ms to avoid confusion
+  if (!tracking.startTime) {
+    _logger('ERROR: finishTracking called with missing startTime, tracking=%j', 
+      Object.keys(tracking).reduce((obj, key) => {
+        obj[key] = typeof tracking[key] === 'object' ? '[Object]' : tracking[key];
+        return obj;
+      }, {}));
+    return;
   }
+  
+  const { processId, path, method } = tracking;
+  if (!processId) {
+    _logger('ERROR: Skipping metrics for missing processId, path=%s', path || 'unknown');
+    return;
+  }
+  
+  const endTime = Date.now();
+  const startTime = tracking.startTime;
+  let duration = tracking.duration;
+  
+  // Use provided duration or calculate with timeout protection
+  if (duration === undefined) {
+    // Implement timeout protection similar to other components
+    const calculatedDuration = endTime - startTime;
+    
+    // Apply safeguards and detect abnormal timing
+    if (calculatedDuration <= 0) {
+      _logger('WARNING: Calculated duration is 0ms for process %s (path: %s), using fallback', 
+        processId, path || 'unknown');
+      duration = 1; // Minimum 1ms fallback (similar to timeout handling in other modules)
+    } else if (calculatedDuration > 15000) { // 15 seconds matches the timeout pattern in your other modules
+      _logger('WARNING: Request took unusually long: %dms for %s, method=%s, path=%s', 
+        calculatedDuration, processId, method || 'unknown', path || 'unknown');
+      duration = calculatedDuration;
+    } else {
+      duration = calculatedDuration;
+    }
+  }
+  
+  // Log detailed timing information for diagnostics
+  _logger('TIMING: process=%s, start=%d, end=%d, duration=%dms, path=%s, action=%s', 
+    processId, startTime, endTime, duration, path || 'unknown', action || 'unknown');
   
   const timeCompleted = new Date().toISOString();
-  const { processId } = tracking;
-  
-  if (!processId) {
-    _logger('Skipping metrics for missing processId');
-    return;
-  }
   
   // Create a complete metrics record
   const metricsRecord = {
