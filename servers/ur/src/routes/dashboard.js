@@ -35,11 +35,48 @@ export function mountDashboard(app) {
       const metrics = getMetrics();
       
       // Prepare a simplified data object with just what the UI needs
+      // Normalize time series data to ensure it's in the right format for the UI
+      let timeSeriesData = [];
+      
+      if (metrics.timeSeriesData && metrics.timeSeriesData.length > 0) {
+        timeSeriesData = metrics.timeSeriesData.map(item => {
+          // Make sure we have the right format for time series data
+          let processCounts = item.processCounts;
+          
+          // Handle PostgreSQL JSONB that may be returned as a string
+          if (typeof processCounts === 'string') {
+            try {
+              processCounts = JSON.parse(processCounts);
+            } catch (e) {
+              processCounts = {};
+            }
+          }
+          
+          return {
+            // Ensure we have a proper timestamp
+            timestamp: item.timestamp,
+            // Use camelCase property names for consistency
+            totalRequests: item.totalRequests || item.total_requests || 0,
+            // Make sure process counts is an object
+            processCounts: processCounts || {},
+            // Add a properly formatted hour field
+            hour: item.hour || new Date(item.timestamp).getUTCHours()
+          };
+        });
+      }
+      
+      // Log the first time series data point for debugging
+      if (timeSeriesData.length > 0) {
+        _logger('Time series data sample: %O', timeSeriesData[0]);
+      } else {
+        _logger('No time series data available');
+      }
+      
       const dashboardData = {
         totalRequests: metrics.totalRequests || 0,
         uniqueProcessIds: Object.keys(metrics.processCounts || {}).length,
         uniqueIps: Object.keys(metrics.ipCounts || {}).length,
-        timeSeriesData: metrics.timeSeriesData || [],
+        timeSeriesData: timeSeriesData,
         startTime: metrics.startTime,
         lastUpdated: new Date().toISOString()
       };

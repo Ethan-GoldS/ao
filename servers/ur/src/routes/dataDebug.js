@@ -4,6 +4,7 @@
 import express from 'express'
 import { logger } from '../logger.js'
 import * as metrics from '../metrics.js'
+import * as db from '../database.js'
 
 const _logger = logger.child('data-debug')
 const router = express.Router()
@@ -59,6 +60,115 @@ router.get('/', (req, res) => {
   // Return as formatted JSON
   res.setHeader('Content-Type', 'application/json')
   res.send(JSON.stringify(debugInfo, null, 2))
+})
+
+/**
+ * Time series data debugging endpoint
+ */
+router.get('/time-series', async (req, res) => {
+  try {
+    // Get raw time series data directly from the database
+    const timeSeriesData = await db.getTimeSeriesData(48) // Get 48 hours of data
+    
+    // Normalize each time series data point
+    const normalizedData = timeSeriesData.map(point => {
+      let processCounts = point.processCounts;
+      
+      // Parse JSONB data if it's a string
+      if (typeof processCounts === 'string') {
+        try {
+          processCounts = JSON.parse(processCounts);
+        } catch (e) {
+          processCounts = {};
+        }
+      }
+      
+      // Create a timestamp from the ISO string
+      const timestamp = new Date(point.timestamp);
+      
+      // Create a time series point that works with the chart
+      return {
+        id: point.id,
+        timestamp: point.timestamp,
+        date: timestamp.toLocaleString(),
+        hour: point.hour,
+        requests: point.totalRequests || point.total_requests || 0,
+        processCounts: processCounts
+      };
+    });
+
+    // Create synthetic test data if we don't have any real time series data
+    if (normalizedData.length === 0) {
+      _logger('No time series data found, generating synthetic test data');
+      
+      // Generate 24 hours of fake data points
+      const now = new Date();
+      for (let i = 0; i < 24; i++) {
+        const pointTime = new Date(now.getTime() - (i * 3600 * 1000));
+        normalizedData.push({
+          timestamp: pointTime.toISOString(),
+          date: pointTime.toLocaleString(),
+          hour: pointTime.getHours(),
+          requests: Math.floor(Math.random() * 100) + 1, // Random request count 1-100
+          processCounts: {}
+        });
+      }
+      
+      // Reverse to get oldest first
+      normalizedData.reverse();
+    }
+    
+    // Send the debug info
+    res.json({
+      count: normalizedData.length,
+      timeSeriesData: normalizedData,
+      debugInfo: {
+        firstTimestamp: normalizedData[0]?.timestamp,
+        lastTimestamp: normalizedData[normalizedData.length - 1]?.timestamp,
+        timeRange: `${normalizedData[0]?.date} to ${normalizedData[normalizedData.length - 1]?.date}`
+      }
+    });
+  } catch (err) {
+    _logger('Error in time series debug endpoint: %o', err);
+    res.status(500).json({ error: err.message, stack: err.stack });
+  }
+})
+
+/**
+ * Generate and store test time series data
+ */
+router.post('/generate-test-data', async (req, res) => {
+  try {
+    // Get the current metrics
+    const currentMetrics = metrics.getMetrics();
+    
+    // Create fake time series data for the last 24 hours
+    const now = new Date();
+    let createdCount = 0;
+    
+    for (let i = 0; i < 24; i++) {
+      const pointTime = new Date(now.getTime() - (i * 3600 * 1000)); // Go back i hours
+      const fakeRequests = Math.floor(Math.random() * 100) + 5; // Random number 5-104
+      
+      // Use the updateTimeSeriesData function to create a time bucket
+      const success = await db.updateTimeSeriesData(
+        pointTime,
+        '8N08BvmC34q9Hxj-YS6eAOd_cSmYqGpezPPHUYWJBhg', // Use a real process ID from logs
+        25 // Fake duration
+      );
+      
+      if (success) createdCount++;
+    }
+    
+    res.json({
+      success: true,
+      message: `Generated ${createdCount} test time series data points`,
+      action: 'Refresh the dashboard to see the new data'
+    });
+  } catch (err) {
+    _logger('Error generating test data: %o', err);
+    res.status(500).json({ error: err.message });
+  }
 })
 
 export default router
