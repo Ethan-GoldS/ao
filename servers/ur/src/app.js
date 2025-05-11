@@ -8,9 +8,8 @@ import { logger } from './logger.js'
 import { proxyWith } from './proxy.js'
 import { redirectWith } from './redirect.js'
 import { metricsMiddleware } from './middleware/metricsMiddleware.js'
-import diagnosticsRoutes from './routes/diagnostics.js'
-import dataDebugRoutes from './routes/dataDebug.js'
-import newDashboardRoutes from './dashboard/newDashboard.js'
+import { mountDashboard } from './routes/dashboard.js'
+import newDashboardRouter from './routes/new-dashboard.js'
 
 const middlewareWithByStrategy = {
   proxy: proxyWith,
@@ -29,17 +28,11 @@ pipe(
   },
   (app) => app.get('/healthcheck', (req, res) => res.status(200).send('OK')),
   (app) => {
-    // Mount diagnostics routes for debugging
-    app.use('/diagnostics', diagnosticsRoutes)
-    logger('Diagnostics routes mounted at /diagnostics')
+    // Mount dashboard routes before proxy middleware
+    mountDashboard(app)
     
-    // Mount data debug route for dashboard troubleshooting
-    app.use('/data-debug', dataDebugRoutes)
-    logger('Data debug route mounted at /data-debug')
-    
-    // Mount the new enhanced dashboard as the main dashboard
-    app.use('/dashboard', newDashboardRoutes)
-    logger('Enhanced dashboard mounted at /dashboard')
+    // Mount new PostgreSQL-based metrics dashboard
+    app.use('/new-dashboard', newDashboardRouter)
     
     return app
   },

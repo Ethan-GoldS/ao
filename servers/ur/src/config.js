@@ -41,21 +41,14 @@ const serverConfigSchema = z.object({
   aoUnit: z.enum(['cu', 'mu']),
   strategy: z.enum(['proxy', 'redirect']),
   surUrl: z.string().url(),
+  // PostgreSQL database URL for metrics storage
+  dbUrl: z.string().url().optional(),
+  // Legacy file-based metrics storage (deprecated)
   metricsStoragePath: z.string().optional(),
   metricsSaveInterval: z.preprocess((val) => {
     if (!val) return 60 // Default 60 seconds
     return typeof val === 'string' ? parseInt(val) : val
-  }, z.number().positive().optional()),
-  // PostgreSQL database connection settings
-  dbUrl: z.string().url().optional(),
-  usePostgres: z.preprocess(
-    (val) => val === true || val === 'true' || val === '1',
-    z.boolean().optional().default(false)
-  ),
-  dbPoolSize: z.preprocess(
-    (val) => typeof val === 'string' ? parseInt(val) : (val || 10),
-    z.number().positive().optional().default(10)
-  )
+  }, z.number().positive().optional())
 })
 
 /**
@@ -80,12 +73,11 @@ const CONFIG_ENVS = {
     aoUnit: process.env.AO_UNIT || 'cu',
     strategy: process.env.STRATEGY || 'proxy',
     surUrl: process.env.SUR_URL,
+    // PostgreSQL database URL for metrics storage
+    dbUrl: process.env.DB_URL || 'postgres://postgres:Password@database-1.cluster-c5oaa2c6cg9n.eu-central-1.rds.amazonaws.com:5432/ur_cu_metrics',
+    // Legacy file-based metrics storage (deprecated)
     metricsStoragePath: process.env.METRICS_STORAGE_PATH,
-    metricsSaveInterval: process.env.METRICS_SAVE_INTERVAL,
-    // PostgreSQL database settings
-    dbUrl: process.env.DB_URL,
-    usePostgres: process.env.USE_POSTGRES || false,
-    dbPoolSize: process.env.DB_POOL_SIZE || 10
+    metricsSaveInterval: process.env.METRICS_SAVE_INTERVAL
   },
   production: {
     MODE,
@@ -97,12 +89,11 @@ const CONFIG_ENVS = {
     aoUnit: process.env.AO_UNIT,
     strategy: process.env.STRATEGY || 'proxy',
     surUrl: process.env.SUR_URL,
+    // PostgreSQL database URL for metrics storage
+    dbUrl: process.env.DB_URL || 'postgres://postgres:Password@database-1.cluster-c5oaa2c6cg9n.eu-central-1.rds.amazonaws.com:5432/ur_cu_metrics',
+    // Legacy file-based metrics storage (deprecated)
     metricsStoragePath: process.env.METRICS_STORAGE_PATH,
-    metricsSaveInterval: process.env.METRICS_SAVE_INTERVAL,
-    // PostgreSQL database settings
-    dbUrl: process.env.DB_URL,
-    usePostgres: process.env.USE_POSTGRES || false,
-    dbPoolSize: process.env.DB_POOL_SIZE || 10
+    metricsSaveInterval: process.env.METRICS_SAVE_INTERVAL
   }
 }
 

@@ -1,857 +1,603 @@
 /**
- * New AO Universal Router Dashboard
- * Uses direct PostgreSQL access for real-time metrics and visualizations
+ * New dashboard interface for PostgreSQL-based metrics
+ * Provides a modern UI for displaying and filtering metrics data
  */
-import express from 'express';
-import { logger } from '../logger.js';
-import * as db from '../database.js';
-import { config } from '../config.js';
-
-const router = express.Router();
-const _logger = logger.child('dashboard');
+import { generateRequestsTable } from './components/requestsTable.js'
+import { generateProcessMetricsTable } from './components/processMetricsTable.js'
+import { generateDashboardCharts } from './components/dashboardCharts.js'
+import { generateClientMetricsTable } from './components/clientMetricsTable.js'
 
 /**
- * Generate the dashboard HTML
+ * Generate the complete dashboard HTML
+ * @param {Object} metrics Metrics object from PostgreSQL
+ * @returns {String} Complete HTML for dashboard
  */
-async function generateDashboardHtml(req) {
-  try {
-    // Get raw data from PostgreSQL
-    const timeSeriesData = await db.getTimeSeriesData(72); // 3 days of data
-    let processCounts = await db.getProcessCounts();
-    const ipCounts = await db.getIpCounts();
-    const actionCounts = await db.getActionCounts();
-    const serverInfo = await db.getServerInfo();
-    const recentRequests = await db.getRecentRequests(30);
-    const dbInfo = await db.getDatabaseDiagnostics();
-    
-    // Format process data
-    const processData = Object.entries(processCounts)
-      .map(([id, data]) => ({
-        id: id, 
-        count: data.count || 0,
-        totalDuration: data.totalDuration || 0,
-        avgDuration: data.count ? Math.round(data.totalDuration / data.count) : 0
-      }))
-      .sort((a, b) => b.count - a.count);
-    
-    // Format IP data  
-    const ipData = Object.entries(ipCounts)
-      .map(([ip, count]) => ({ ip, count }))
-      .sort((a, b) => b.count - a.count)
-      .slice(0, 20);
-      
-    // Format action data
-    const actionData = Object.entries(actionCounts)
-      .map(([action, data]) => ({
-        action: action || 'Unknown',
-        count: data.count || 0,
-        totalDuration: data.totalDuration || 0,
-        avgDuration: data.count ? Math.round(data.totalDuration / data.count) : 0
-      }))
-      .sort((a, b) => b.count - a.count);
-      
-    // Process time series data for charts
-    const processedTimeData = timeSeriesData.map(point => {
-      // Normalize data points for consistency
-      let processCounts = point.processCounts;
-      
-      // Parse JSONB if it's a string
-      if (typeof processCounts === 'string') {
-        try {
-          processCounts = JSON.parse(processCounts);
-        } catch (e) {
-          processCounts = {};
-        }
-      }
-      
-      // Return standardized data point
-      return {
-        timestamp: point.timestamp,
-        date: new Date(point.timestamp).toLocaleString(),
-        requests: parseInt(point.totalRequests || point.total_requests || 0, 10),
-        hour: parseInt(point.hour || new Date(point.timestamp).getUTCHours(), 10),
-        processCounts: processCounts || {}
-      };
-    }).sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-    
-    // Format request details
-    const requestDetails = recentRequests.map(req => {
-      let details = req.details;
-      
-      // Parse JSONB if needed
-      if (typeof details === 'string') {
-        try {
-          details = JSON.parse(details);
-        } catch (e) {
-          details = {};
-        }
-      }
-      
-      return {
-        id: req.id,
-        processId: req.process_id,
-        timestamp: new Date(req.timestamp).toLocaleString(),
-        ip: req.ip,
-        referrer: req.referer,
-        details: details
-      };
-    });
-    
-    // Gather environment info
-    const envInfo = {
-      usePostgres: config.usePostgres,
-      dbUrl: config.dbUrl ? config.dbUrl.replace(/:\/\/[^:]+:[^@]+@/, '://****:****@') : 'Not configured',
-      dbPoolSize: config.dbPoolSize,
-      nodeEnv: process.env.NODE_ENV || 'development',
-      version: process.env.npm_package_version || 'Unknown'
-    };
-  
-    // Generate dashboard HTML
-    return `
+export function generateNewDashboardHtml(metrics) {
+  const {
+    recentRequests,
+    requestDetails,
+    processCounts,
+    processTiming,
+    actionCounts,
+    actionTiming,
+    ipCounts,
+    referrerCounts,
+    timeSeriesData,
+    timeLabels,
+    topProcessIds,
+    totalRequests,
+    startTime,
+    uniqueProcesses,
+    uniqueIps
+  } = metrics
+
+  // Format date for display
+  const startTimeFormatted = new Date(startTime).toLocaleString()
+
+  return `
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>AO Universal Router Dashboard</title>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/css/bootstrap.min.css">
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/moment@2.29.4/moment.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-moment@1.0.1/dist/chartjs-adapter-moment.min.js"></script>
+  <title>AO Unit Router Metrics Dashboard</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
   <style>
     :root {
-      --primary-color: #0066cc;
-      --secondary-color: #50b3ff;
-      --accent-color: #ff5500;
-      --text-color: #333;
-      --bg-color: #f5f5f5;
-      --card-color: #fff;
+      --primary-color: #3498db;
+      --secondary-color: #2c3e50;
+      --accent-color: #e74c3c;
+      --light-bg: #f5f7fa;
+      --dark-bg: #2c3e50;
+      --card-bg: #ffffff;
+      --text-color: #333333;
     }
     
     body {
-      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-      background-color: var(--bg-color);
+      background-color: var(--light-bg);
       color: var(--text-color);
-      line-height: 1.6;
-      margin: 0;
-      padding: 0;
-    }
-    
-    .container {
-      max-width: 1400px;
-      margin: 0 auto;
-      padding: 20px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      padding-top: 20px;
     }
     
     .dashboard-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 20px;
-      padding-bottom: 10px;
-      border-bottom: 1px solid #ddd;
-    }
-    
-    .dashboard-title {
-      display: flex;
-      align-items: center;
-    }
-    
-    .dashboard-title h1 {
-      margin: 0;
-      font-weight: 500;
-      color: var(--primary-color);
-    }
-    
-    .dashboard-controls {
-      display: flex;
-      align-items: center;
-      gap: 15px;
-    }
-    
-    .last-updated {
-      font-size: 14px;
-      color: #666;
-    }
-    
-    .btn-refresh {
-      background-color: var(--primary-color);
+      background-color: var(--secondary-color);
       color: white;
-      border: none;
-      padding: 8px 16px;
-      border-radius: 4px;
-      cursor: pointer;
-      font-weight: 500;
-      transition: background-color 0.2s;
-    }
-    
-    .btn-refresh:hover {
-      background-color: #0055aa;
-    }
-    
-    .stats-row {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 15px;
-      margin-bottom: 20px;
-    }
-    
-    .stat-card {
-      flex: 1;
-      min-width: 200px;
-      background-color: var(--card-color);
-      border-radius: 8px;
+      border-radius: 10px;
       padding: 20px;
-      box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-      transition: transform 0.2s, box-shadow 0.2s;
+      margin-bottom: 20px;
+      box-shadow: 0 4px 8px rgba(0,0,0,0.1);
     }
     
-    .stat-card:hover {
-      transform: translateY(-2px);
-      box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    .stats-card {
+      background-color: var(--card-bg);
+      border-radius: 10px;
+      padding: 15px;
+      margin-bottom: 20px;
+      box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+      transition: transform 0.3s ease;
     }
     
-    .stat-card h3 {
-      margin-top: 0;
-      color: #666;
-      font-size: 14px;
+    .stats-card:hover {
+      transform: translateY(-5px);
+    }
+    
+    .stats-value {
+      font-size: 2.5rem;
+      font-weight: bold;
+      color: var(--primary-color);
+    }
+    
+    .stats-label {
+      font-size: 0.9rem;
+      color: #777;
       text-transform: uppercase;
-      letter-spacing: 0.5px;
-      font-weight: 500;
     }
     
-    .stat-value {
-      font-size: 28px;
-      font-weight: 600;
-      color: var(--primary-color);
-      margin: 10px 0;
-    }
-    
-    .stat-desc {
-      font-size: 12px;
-      color: #666;
-    }
-    
-    .card {
-      background-color: var(--card-color);
-      border-radius: 8px;
+    .tab-content {
+      background-color: var(--card-bg);
+      border-radius: 0 0 10px 10px;
       padding: 20px;
-      margin-bottom: 20px;
-      box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+      box-shadow: 0 4px 8px rgba(0,0,0,0.1);
     }
     
-    .card-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 15px;
-      border-bottom: 1px solid #eee;
-      padding-bottom: 10px;
-    }
-    
-    .card-title {
-      margin: 0;
-      font-size: 18px;
+    .nav-tabs .nav-link {
+      border-radius: 10px 10px 0 0;
       font-weight: 500;
-      color: var(--primary-color);
+      color: var(--secondary-color);
     }
     
-    .chart-container {
-      position: relative;
-      height: 300px;
-      margin-bottom: 20px;
+    .nav-tabs .nav-link.active {
+      background-color: var(--card-bg);
+      color: var(--primary-color);
+      border-bottom: none;
     }
     
     table {
       width: 100%;
       border-collapse: collapse;
-      font-size: 14px;
     }
     
-    th, td {
-      padding: 12px 15px;
-      text-align: left;
-      border-bottom: 1px solid #eee;
-    }
-    
-    th {
-      background-color: #f8f9fa;
-      font-weight: 500;
-      color: #666;
-    }
-    
-    tr:hover {
-      background-color: #f8f9fa;
-    }
-    
-    .truncate {
-      max-width: 150px;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      display: block;
-    }
-    
-    .badge {
-      padding: 5px 10px;
-      border-radius: 12px;
-      font-size: 12px;
-      font-weight: 500;
-    }
-    
-    .badge-primary {
+    table th {
       background-color: var(--primary-color);
       color: white;
-    }
-    
-    .time-controls {
-      display: flex;
-      gap: 15px;
-      align-items: center;
-      margin-bottom: 15px;
-    }
-    
-    .time-control-group {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-    
-    .time-control-label {
-      font-size: 14px;
-      color: #666;
-    }
-    
-    select, input {
-      padding: 8px 12px;
-      border: 1px solid #ddd;
-      border-radius: 4px;
-      font-size: 14px;
-    }
-    
-    .tab-content {
-      margin-top: 15px;
-    }
-    
-    .tabs {
-      display: flex;
-      border-bottom: 1px solid #ddd;
-      margin-bottom: 15px;
-    }
-    
-    .tab {
-      padding: 10px 15px;
-      cursor: pointer;
-      border-bottom: 2px solid transparent;
+      padding: 12px;
       font-weight: 500;
     }
     
-    .tab.active {
-      border-bottom-color: var(--primary-color);
-      color: var(--primary-color);
+    table td {
+      padding: 12px;
+      border-bottom: 1px solid #e9ecef;
     }
     
-    .tab-pane {
-      display: none;
+    table tbody tr:hover {
+      background-color: #f5f7fa;
     }
     
-    .tab-pane.active {
-      display: block;
+    .table-responsive {
+      overflow-x: auto;
+      margin-bottom: 20px;
     }
     
-    .system-info {
-      font-family: monospace;
-      font-size: 13px;
-      max-height: 200px;
-      overflow: auto;
-      background: #f5f5f5;
-      padding: 15px;
+    .filter-group {
+      margin-bottom: 15px;
+    }
+    
+    .filter-input {
+      padding: 8px 12px;
+      border-radius: 5px;
+      border: 1px solid #ced4da;
+      width: 100%;
+    }
+    
+    .copy-btn {
+      background-color: var(--primary-color);
+      color: white;
+      border: none;
       border-radius: 4px;
+      padding: 5px 10px;
+      cursor: pointer;
+      font-size: 0.8rem;
+      transition: background-color 0.3s;
     }
     
-    footer {
-      text-align: center;
-      padding: 20px;
-      margin-top: 30px;
-      border-top: 1px solid #ddd;
-      color: #666;
-      font-size: 14px;
+    .copy-btn:hover {
+      background-color: #2980b9;
+    }
+    
+    .details-content {
+      background-color: #f8f9fa;
+      padding: 10px;
+      border-radius: 5px;
+      margin-top: 10px;
+      max-height: 300px;
+      overflow-y: auto;
+    }
+    
+    .details-table {
+      width: 100%;
+      margin-bottom: 0;
+    }
+    
+    .details-table td {
+      padding: 5px;
+      border-bottom: 1px solid #dee2e6;
+    }
+    
+    .details-table tr:last-child td {
+      border-bottom: none;
+    }
+    
+    .chart-container {
+      height: 300px;
+      margin-bottom: 30px;
     }
     
     @media (max-width: 768px) {
-      .stats-row {
-        flex-direction: column;
+      .stats-value {
+        font-size: 1.8rem;
       }
       
-      .stat-card {
-        width: 100%;
+      .tab-content {
+        padding: 15px 10px;
       }
-      
-      .dashboard-header {
-        flex-direction: column;
-        align-items: flex-start;
-      }
-      
-      .dashboard-controls {
-        margin-top: 15px;
-      }
-      
-      .time-controls {
-        flex-wrap: wrap;
-      }
+    }
+    
+    .refresh-btn {
+      background-color: var(--primary-color);
+      color: white;
+      border: none;
+      border-radius: 5px;
+      padding: 8px 15px;
+      cursor: pointer;
+      margin-bottom: 15px;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+    
+    .refresh-btn:hover {
+      background-color: #2980b9;
+    }
+    
+    .mini-chart {
+      height: 150px;
+      width: 100%;
+    }
+    
+    .process-details {
+      padding: 10px;
+    }
+    
+    .request-body-preview {
+      max-height: 150px;
+      overflow-y: auto;
+      font-family: monospace;
+      background-color: #f8f9fa;
+      padding: 10px;
+      border-radius: 5px;
+      font-size: 0.85rem;
+      white-space: pre-wrap;
     }
   </style>
 </head>
 <body>
-  <div class="container">
+  <div class="container-fluid">
     <div class="dashboard-header">
-      <div class="dashboard-title">
-        <h1>AO Universal Router Dashboard</h1>
-      </div>
-      <div class="dashboard-controls">
-        <div class="last-updated">Last updated: <span id="last-updated">${new Date().toLocaleString()}</span></div>
-        <button class="btn-refresh" id="refresh-btn">Refresh Now</button>
-      </div>
-    </div>
-    
-    <div class="stats-row">
-      <div class="stat-card">
-        <h3>Total Requests</h3>
-        <div class="stat-value">${(serverInfo?.totalRequests || 0).toLocaleString()}</div>
-        <div class="stat-desc">Since ${serverInfo?.startTime ? new Date(serverInfo.startTime).toLocaleString() : 'startup'}</div>
-      </div>
-      <div class="stat-card">
-        <h3>Unique Processes</h3>
-        <div class="stat-value">${processData.length.toLocaleString()}</div>
-        <div class="stat-desc">Distinct AO processes tracked</div>
-      </div>
-      <div class="stat-card">
-        <h3>Unique IP Addresses</h3>
-        <div class="stat-value">${ipData.length.toLocaleString()}</div>
-        <div class="stat-desc">Distinct clients connected</div>
-      </div>
-      <div class="stat-card">
-        <h3>Database Size</h3>
-        <div class="stat-value">${dbInfo?.recordCounts?.reduce((acc, item) => acc + item.count, 0) || 0}</div>
-        <div class="stat-desc">Total records across all tables</div>
+      <div class="row align-items-center">
+        <div class="col-md-8">
+          <h1><i class="bi bi-speedometer2"></i> AO Unit Router Metrics</h1>
+          <p>Real-time monitoring of AO process requests with PostgreSQL data storage</p>
+          <p class="small">Started: ${startTimeFormatted}</p>
+        </div>
+        <div class="col-md-4 text-md-end">
+          <button id="refreshDashboard" class="refresh-btn">
+            <i class="bi bi-arrow-clockwise"></i> Refresh Dashboard
+          </button>
+        </div>
       </div>
     </div>
     
-    <div class="card">
-      <div class="card-header">
-        <h2 class="card-title">Request Traffic</h2>
-        <div class="time-controls">
-          <div class="time-control-group">
-            <span class="time-control-label">Time Range:</span>
-            <select id="time-range-select">
-              <option value="6h">Last 6 hours</option>
-              <option value="24h" selected>Last 24 hours</option>
-              <option value="48h">Last 48 hours</option>
-              <option value="7d">Last 7 days</option>
-            </select>
+    <div class="row mb-4">
+      <div class="col-md-3">
+        <div class="stats-card text-center">
+          <div class="stats-value">${totalRequests.toLocaleString()}</div>
+          <div class="stats-label">Total Requests</div>
+        </div>
+      </div>
+      <div class="col-md-3">
+        <div class="stats-card text-center">
+          <div class="stats-value">${uniqueProcesses.toLocaleString()}</div>
+          <div class="stats-label">Unique Processes</div>
+        </div>
+      </div>
+      <div class="col-md-3">
+        <div class="stats-card text-center">
+          <div class="stats-value">${Object.keys(actionCounts).length.toLocaleString()}</div>
+          <div class="stats-label">Different Actions</div>
+        </div>
+      </div>
+      <div class="col-md-3">
+        <div class="stats-card text-center">
+          <div class="stats-value">${uniqueIps.toLocaleString()}</div>
+          <div class="stats-label">Unique IP Addresses</div>
+        </div>
+      </div>
+    </div>
+    
+    <div class="row mb-4">
+      <div class="col-12">
+        <div class="chart-container">
+          <canvas id="requestsTimeChart"></canvas>
+        </div>
+      </div>
+    </div>
+    
+    <div class="row">
+      <div class="col-12">
+        <ul class="nav nav-tabs" id="metricsTab" role="tablist">
+          <li class="nav-item" role="presentation">
+            <button class="nav-link active" id="requests-tab" data-bs-toggle="tab" data-bs-target="#requests" type="button" role="tab">Recent Requests</button>
+          </li>
+          <li class="nav-item" role="presentation">
+            <button class="nav-link" id="processes-tab" data-bs-toggle="tab" data-bs-target="#processes" type="button" role="tab">Processes</button>
+          </li>
+          <li class="nav-item" role="presentation">
+            <button class="nav-link" id="actions-tab" data-bs-toggle="tab" data-bs-target="#actions" type="button" role="tab">Actions</button>
+          </li>
+          <li class="nav-item" role="presentation">
+            <button class="nav-link" id="clients-tab" data-bs-toggle="tab" data-bs-target="#clients" type="button" role="tab">Clients</button>
+          </li>
+        </ul>
+        
+        <div class="tab-content" id="metricsTabContent">
+          <div class="tab-pane fade show active" id="requests" role="tabpanel">
+            <h3>Recent Requests</h3>
+            <div class="table-responsive">
+              ${generateRequestsTable(recentRequests, requestDetails)}
+            </div>
           </div>
-          <div class="time-control-group">
-            <span class="time-control-label">Group By:</span>
-            <select id="interval-select">
-              <option value="5m">5 Minutes</option>
-              <option value="15m">15 Minutes</option>
-              <option value="30m">30 Minutes</option>
-              <option value="1h" selected>1 Hour</option>
-              <option value="6h">6 Hours</option>
-              <option value="1d">1 Day</option>
-            </select>
+          
+          <div class="tab-pane fade" id="processes" role="tabpanel">
+            <div class="row">
+              <div class="col-md-8">
+                <h3>Process Metrics</h3>
+                <div class="table-responsive">
+                  ${generateProcessMetricsTable(metrics)}
+                </div>
+              </div>
+              <div class="col-md-4">
+                <h3>Top Processes</h3>
+                <div class="chart-container">
+                  <canvas id="topProcessesChart"></canvas>
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          <div class="tab-pane fade" id="actions" role="tabpanel">
+            <div class="row">
+              <div class="col-md-8">
+                <h3>Action Metrics</h3>
+                <div class="table-responsive" id="actionsTable">
+                  ${generateDashboardCharts(metrics, 'actions')}
+                </div>
+              </div>
+              <div class="col-md-4">
+                <h3>Actions Distribution</h3>
+                <div class="chart-container">
+                  <canvas id="actionsChart"></canvas>
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          <div class="tab-pane fade" id="clients" role="tabpanel">
+            <h3>Client Information</h3>
+            ${generateClientMetricsTable(metrics)}
           </div>
         </div>
       </div>
-      <div class="chart-container">
-        <canvas id="traffic-chart"></canvas>
-      </div>
     </div>
-    
-    <div class="card">
-      <div class="card-header">
-        <h2 class="card-title">Process Activity</h2>
-      </div>
-      <div class="tabs">
-        <div class="tab active" data-tab="processes">Top Processes</div>
-        <div class="tab" data-tab="ips">Client IPs</div>
-        <div class="tab" data-tab="actions">Actions</div>
-      </div>
-      <div class="tab-content">
-        <div class="tab-pane active" id="processes-tab">
-          <table>
-            <thead>
-              <tr>
-                <th>Process ID</th>
-                <th>Requests</th>
-                <th>Total Duration (ms)</th>
-                <th>Avg. Duration (ms)</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${processData.slice(0, 10).map(process => `
-                <tr>
-                  <td><div class="truncate" title="${process.id}">${process.id}</div></td>
-                  <td>${process.count.toLocaleString()}</td>
-                  <td>${process.totalDuration.toLocaleString()}</td>
-                  <td>${process.avgDuration.toLocaleString()}</td>
-                </tr>
-              `).join('')}
-            </tbody>
-          </table>
-        </div>
-        <div class="tab-pane" id="ips-tab">
-          <table>
-            <thead>
-              <tr>
-                <th>IP Address</th>
-                <th>Requests</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${ipData.map(ip => `
-                <tr>
-                  <td>${ip.ip}</td>
-                  <td>${ip.count.toLocaleString()}</td>
-                </tr>
-              `).join('')}
-            </tbody>
-          </table>
-        </div>
-        <div class="tab-pane" id="actions-tab">
-          <table>
-            <thead>
-              <tr>
-                <th>Action</th>
-                <th>Requests</th>
-                <th>Total Duration (ms)</th>
-                <th>Avg. Duration (ms)</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${actionData.map(action => `
-                <tr>
-                  <td>${action.action}</td>
-                  <td>${action.count.toLocaleString()}</td>
-                  <td>${action.totalDuration.toLocaleString()}</td>
-                  <td>${action.avgDuration.toLocaleString()}</td>
-                </tr>
-              `).join('')}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-    
-    <div class="card">
-      <div class="card-header">
-        <h2 class="card-title">Recent Requests</h2>
-      </div>
-      <table>
-        <thead>
-          <tr>
-            <th>Time</th>
-            <th>Process</th>
-            <th>IP</th>
-            <th>Referrer</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${requestDetails.map(req => `
-            <tr>
-              <td>${req.timestamp}</td>
-              <td><div class="truncate" title="${req.processId}">${req.processId}</div></td>
-              <td>${req.ip || 'N/A'}</td>
-              <td>${req.referrer || 'N/A'}</td>
-            </tr>
-          `).join('')}
-        </tbody>
-      </table>
-    </div>
-    
-    <div class="card">
-      <div class="card-header">
-        <h2 class="card-title">System Information</h2>
-      </div>
-      <div class="tabs">
-        <div class="tab active" data-tab="env">Environment</div>
-        <div class="tab" data-tab="db">Database</div>
-      </div>
-      <div class="tab-content">
-        <div class="tab-pane active" id="env-tab">
-          <pre class="system-info">${JSON.stringify(envInfo, null, 2)}</pre>
-        </div>
-        <div class="tab-pane" id="db-tab">
-          <pre class="system-info">${JSON.stringify(dbInfo, null, 2)}</pre>
-        </div>
-      </div>
-    </div>
-    
-    <footer>
-      AO Universal Router Dashboard | Version: ${envInfo.version} | Server Time: ${new Date().toLocaleString()}
-    </footer>
   </div>
   
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.3.0/dist/chart.umd.min.js"></script>
+  
   <script>
-    // Store the time series data for charts
-    const timeSeriesData = ${JSON.stringify(processedTimeData)};
+  // Dashboard initialization
+  document.addEventListener('DOMContentLoaded', function() {
+    // Initialize charts
+    initializeCharts();
     
-    // Set up traffic chart
-    function setupTrafficChart() {
-      const ctx = document.getElementById('traffic-chart').getContext('2d');
+    // Set up refresh button
+    document.getElementById('refreshDashboard').addEventListener('click', function() {
+      refreshDashboard();
+    });
+    
+    // Set up copy buttons
+    document.querySelectorAll('.copy-btn').forEach(btn => {
+      btn.addEventListener('click', function() {
+        const id = this.getAttribute('data-id');
+        navigator.clipboard.writeText(id)
+          .then(() => {
+            const originalText = this.textContent;
+            this.textContent = 'Copied!';
+            setTimeout(() => {
+              this.textContent = originalText;
+            }, 1500);
+          });
+      });
+    });
+    
+    // Set up table filters
+    setupTableFilters();
+  });
+  
+  function initializeCharts() {
+    // Time series chart
+    const timeCtx = document.getElementById('requestsTimeChart').getContext('2d');
+    const timeChart = new Chart(timeCtx, {
+      type: 'line',
+      data: {
+        labels: ${JSON.stringify(timeLabels)},
+        datasets: [{
+          label: 'Requests',
+          data: ${JSON.stringify(timeSeriesData.map(bucket => bucket.totalRequests))},
+          borderColor: '#3498db',
+          backgroundColor: 'rgba(52, 152, 219, 0.1)',
+          borderWidth: 2,
+          fill: true,
+          tension: 0.2
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          title: {
+            display: true,
+            text: 'Request Volume Over Time',
+            font: {
+              size: 16
+            }
+          },
+          legend: {
+            position: 'top'
+          }
+        },
+        scales: {
+          y: {
+            beginAtZero: true,
+            ticks: {
+              precision: 0
+            }
+          }
+        }
+      }
+    });
+    
+    // Top processes chart
+    if (document.getElementById('topProcessesChart')) {
+      const processesCtx = document.getElementById('topProcessesChart').getContext('2d');
       
-      // Process data for chart
-      const chartData = timeSeriesData.map(point => ({
-        x: new Date(point.timestamp),
-        y: point.requests
-      }));
+      // Get top 5 processes by count
+      const topProcesses = Object.entries(processCounts)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 5);
       
-      const trafficChart = new Chart(ctx, {
-        type: 'line',
+      new Chart(processesCtx, {
+        type: 'bar',
         data: {
+          labels: topProcesses.map(p => p[0].substring(0, 10) + '...'),
           datasets: [{
-            label: 'Requests',
-            data: chartData,
-            backgroundColor: 'rgba(0, 102, 204, 0.1)',
-            borderColor: 'rgba(0, 102, 204, 1)',
-            borderWidth: 2,
-            pointBackgroundColor: 'rgba(0, 102, 204, 1)',
-            pointRadius: 3,
-            pointHoverRadius: 5,
-            fill: true,
-            tension: 0.2
+            label: 'Request Count',
+            data: topProcesses.map(p => p[1]),
+            backgroundColor: [
+              'rgba(52, 152, 219, 0.7)',
+              'rgba(46, 204, 113, 0.7)',
+              'rgba(155, 89, 182, 0.7)',
+              'rgba(52, 73, 94, 0.7)',
+              'rgba(22, 160, 133, 0.7)'
+            ],
+            borderWidth: 1
           }]
         },
         options: {
           responsive: true,
           maintainAspectRatio: false,
+          plugins: {
+            legend: {
+              display: false
+            }
+          }
+        }
+      });
+    }
+    
+    // Actions chart
+    if (document.getElementById('actionsChart')) {
+      const actionsCtx = document.getElementById('actionsChart').getContext('2d');
+      
+      // Get top actions by count
+      const topActions = Object.entries(actionCounts)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 5);
+      
+      new Chart(actionsCtx, {
+        type: 'doughnut',
+        data: {
+          labels: topActions.map(a => a[0]),
+          datasets: [{
+            data: topActions.map(a => a[1]),
+            backgroundColor: [
+              'rgba(52, 152, 219, 0.7)',
+              'rgba(46, 204, 113, 0.7)',
+              'rgba(155, 89, 182, 0.7)',
+              'rgba(52, 73, 94, 0.7)',
+              'rgba(22, 160, 133, 0.7)'
+            ]
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: {
+              position: 'right'
+            }
+          }
+        }
+      });
+    }
+    
+    // Mini charts for process details
+    document.querySelectorAll('.mini-chart').forEach(chartElem => {
+      const processId = chartElem.getAttribute('data-process-id');
+      const timeLabels = JSON.parse(chartElem.getAttribute('data-time-labels'));
+      const values = JSON.parse(chartElem.getAttribute('data-values'));
+      
+      const ctx = chartElem.getContext('2d');
+      new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: timeLabels,
+          datasets: [{
+            label: 'Requests',
+            data: values,
+            borderColor: '#3498db',
+            backgroundColor: 'rgba(52, 152, 219, 0.1)',
+            borderWidth: 1,
+            fill: true
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: {
+              display: false
+            }
+          },
           scales: {
             x: {
-              type: 'time',
-              time: {
-                unit: 'hour',
-                displayFormats: {
-                  hour: 'MMM D, HH:mm'
-                },
-                tooltipFormat: 'MMM D, YYYY, HH:mm'
-              },
-              title: {
-                display: true,
-                text: 'Time'
-              }
+              display: false
             },
             y: {
               beginAtZero: true,
-              title: {
-                display: true,
-                text: 'Requests'
+              ticks: {
+                precision: 0
               }
             }
-          },
-          plugins: {
-            tooltip: {
-              mode: 'index',
-              intersect: false
-            },
-            legend: {
-              display: true,
-              position: 'top'
-            }
           }
         }
       });
-      
-      // Update chart based on time range and interval selection
-      function updateChartRange() {
-        const timeRange = document.getElementById('time-range-select').value;
-        const interval = document.getElementById('interval-select').value;
-        
-        // Calculate time range
-        const now = new Date();
-        let startTime;
-        
-        switch(timeRange) {
-          case '6h':
-            startTime = new Date(now.getTime() - (6 * 60 * 60 * 1000));
-            break;
-          case '48h':
-            startTime = new Date(now.getTime() - (48 * 60 * 60 * 1000));
-            break;
-          case '7d':
-            startTime = new Date(now.getTime() - (7 * 24 * 60 * 60 * 1000));
-            break;
-          case '24h':
-          default:
-            startTime = new Date(now.getTime() - (24 * 60 * 60 * 1000));
-        }
-        
-        // Filter data for selected time range
-        const filteredData = timeSeriesData.filter(point => {
-          const timestamp = new Date(point.timestamp);
-          return timestamp >= startTime && timestamp <= now;
-        });
-        
-        // Group data by interval
-        const groupedData = groupDataByInterval(filteredData, interval);
-        
-        // Update chart
-        trafficChart.data.datasets[0].data = groupedData.map(group => ({
-          x: new Date(group.timestamp),
-          y: group.requests
-        }));
-        
-        // Update time unit based on interval
-        let timeUnit = 'hour';
-        let format = 'MMM D, HH:mm';
-        
-        switch(interval) {
-          case '5m':
-          case '15m':
-          case '30m':
-            timeUnit = 'minute';
-            format = 'HH:mm';
-            break;
-          case '6h':
-            timeUnit = 'hour';
-            format = 'MMM D, HH:mm';
-            break;
-          case '1d':
-            timeUnit = 'day';
-            format = 'MMM D';
-            break;
-          default:
-            timeUnit = 'hour';
-            format = 'MMM D, HH:mm';
-        }
-        
-        trafficChart.options.scales.x.time.unit = timeUnit;
-        trafficChart.options.scales.x.time.displayFormats[timeUnit] = format;
-        
-        trafficChart.update();
-      }
-      
-      // Group data function
-      function groupDataByInterval(data, interval) {
-        if (!data.length) return [];
-        
-        // Determine bucket size in minutes
-        let bucketSizeMinutes;
-        
-        switch(interval) {
-          case '5m': bucketSizeMinutes = 5; break;
-          case '15m': bucketSizeMinutes = 15; break;
-          case '30m': bucketSizeMinutes = 30; break;
-          case '1h': bucketSizeMinutes = 60; break;
-          case '6h': bucketSizeMinutes = 360; break;
-          case '1d': bucketSizeMinutes = 1440; break;
-          default: bucketSizeMinutes = 60;
-        }
-        
-        const bucketSizeMs = bucketSizeMinutes * 60 * 1000;
-        const buckets = {};
-        
-        // Group data into buckets
-        data.forEach(point => {
-          const timestamp = new Date(point.timestamp);
-          // Round to nearest bucket
-          const bucketTime = new Date(Math.floor(timestamp.getTime() / bucketSizeMs) * bucketSizeMs);
-          const bucketKey = bucketTime.getTime();
-          
-          if (!buckets[bucketKey]) {
-            buckets[bucketKey] = {
-              timestamp: bucketTime,
-              requests: 0
-            };
-          }
-          
-          buckets[bucketKey].requests += point.requests;
-        });
-        
-        // Convert buckets to array and sort
-        return Object.values(buckets).sort((a, b) => a.timestamp - b.timestamp);
-      }
-      
-      // Set up event listeners
-      document.getElementById('time-range-select').addEventListener('change', updateChartRange);
-      document.getElementById('interval-select').addEventListener('change', updateChartRange);
-      
-      // Initialize with default selections
-      updateChartRange();
-      
-      return trafficChart;
-    }
-    
-    // Tab functionality
-    function setupTabs() {
-      const tabs = document.querySelectorAll('.tab');
-      
-      tabs.forEach(tab => {
-        tab.addEventListener('click', () => {
-          // Get the tab group
-          const tabGroup = tab.parentElement;
-          const tabContentId = tabGroup.nextElementSibling.id;
-          
-          // Remove active class from all tabs in this group
-          tabGroup.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-          
-          // Add active class to clicked tab
-          tab.classList.add('active');
-          
-          // Get the tab pane ID
-          const tabId = tab.getAttribute('data-tab');
-          
-          // Hide all tab panes
-          document.querySelectorAll('.tab-pane').forEach(pane => pane.classList.remove('active'));
-          
-          // Show the selected tab pane
-          document.getElementById(tabId + '-tab').classList.add('active');
-        });
-      });
-    }
-    
-    // Refresh functionality
-    function setupRefresh() {
-      document.getElementById('refresh-btn').addEventListener('click', () => {
-        window.location.reload();
-      });
-    }
-    
-    // Initialize dashboard
-    document.addEventListener('DOMContentLoaded', () => {
-      setupTrafficChart();
-      setupTabs();
-      setupRefresh();
     });
+  }
+  
+  function setupTableFilters() {
+    const filters = [
+      { id: 'requestFilter', tableSelector: '#requests table tbody tr' },
+      { id: 'processFilter', tableSelector: '#processes table tbody tr' },
+      { id: 'actionFilter', tableSelector: '#actions table tbody tr' }
+    ];
+    
+    filters.forEach(filter => {
+      const filterInput = document.getElementById(filter.id);
+      if (filterInput) {
+        filterInput.addEventListener('keyup', function() {
+          const value = this.value.toLowerCase();
+          document.querySelectorAll(filter.tableSelector).forEach(row => {
+            const text = row.textContent.toLowerCase();
+            row.style.display = text.indexOf(value) > -1 ? '' : 'none';
+          });
+        });
+      }
+    });
+  }
+  
+  function refreshDashboard() {
+    const refreshBtn = document.getElementById('refreshDashboard');
+    refreshBtn.innerHTML = '<i class="bi bi-arrow-clockwise"></i> Refreshing...';
+    refreshBtn.disabled = true;
+    
+    fetch('/new-dashboard/api/metrics')
+      .then(response => response.json())
+      .then(data => {
+        location.reload();
+      })
+      .catch(error => {
+        console.error('Error refreshing dashboard:', error);
+        alert('Error refreshing dashboard data');
+      })
+      .finally(() => {
+        refreshBtn.innerHTML = '<i class="bi bi-arrow-clockwise"></i> Refresh Dashboard';
+        refreshBtn.disabled = false;
+      });
+  }
   </script>
 </body>
-</html>`;
-  } catch (err) {
-    _logger('Error generating dashboard HTML: %O', err);
-    return `
-      <html>
-        <head><title>Dashboard Error</title></head>
-        <body>
-          <h1>Dashboard Error</h1>
-          <p>Error generating dashboard: ${err.message}</p>
-          <pre>${err.stack}</pre>
-          <p><a href="javascript:window.location.reload()">Retry</a></p>
-        </body>
-      </html>
-    `;
-  }
+</html>
+  `;
 }
-
-// Main dashboard route
-router.get('/', async (req, res) => {
-  try {
-    const html = await generateDashboardHtml(req);
-    res.setHeader('Content-Type', 'text/html');
-    res.send(html);
-  } catch (err) {
-    _logger('Error rendering dashboard: %O', err);
-    res.status(500).send(`Dashboard Error: ${err.message}`);
-  }
-});
-
-// Export the router
-export default router;

@@ -169,25 +169,8 @@ export function generateActionMetricsTable(metrics) {
 }
 
 export function generateClientMetricsTable(metrics) {
-  // Helper to format metrics data that could be in array or object format
-  const formatMetrics = (data) => {
-    if (!data) return [];
-    
-    // If data is already in array format (from previous implementation)
-    if (Array.isArray(data)) {
-      return data;
-    }
-    
-    // Convert object format to array format
-    if (typeof data === 'object') {
-      return Object.entries(data).sort((a, b) => b[1] - a[1]).slice(0, 10);
-    }
-    
-    return [];
-  };
-  
   // Generate IP address metrics
-  const ipMetricsHtml = formatMetrics(metrics.ipCounts)
+  const ipMetricsHtml = metrics.ipCounts
     .map(([ip, count]) => `
       <tr>
         <td>${ip}</td>
@@ -196,7 +179,7 @@ export function generateClientMetricsTable(metrics) {
     `).join('');
     
   // Generate referrer metrics
-  const referrerMetricsHtml = formatMetrics(metrics.referrerCounts)
+  const referrerMetricsHtml = metrics.referrerCounts
     .map(([referrer, count]) => `
       <tr>
         <td>${referrer}</td>
