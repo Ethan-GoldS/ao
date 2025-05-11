@@ -12,7 +12,6 @@ This service will deterministically route `ao` Process operations to an underlyi
 - [Debug Logging](#debug-logging)
 - [Project Structure](#project-structure)
 - [System Requirements](#system-requirements)
-- [Metrics Database Structure](#metrics-database-structure)
 
 <!-- tocstop -->
 
@@ -69,44 +68,147 @@ So in summary, this `ao` Unit Server system requirements are:
 - an ability to accept Ingress from the Internet
 - an ability to Egress to other `ao` Units
 
-## Metrics Database Structure
+## Metrics System
 
-The `ao` Unit Router uses SQLite for storing metrics data. The database is stored in a file specified by the `METRICS_DB_PATH` environment variable, or defaults to `./data/metrics.db` if not specified.
+The UR server includes a metrics collection system that tracks request metrics without interfering with the core proxy functionality. The metrics system supports two storage backends:
 
-### Database Tables
+1. **File-based storage**: Enabled by setting `METRICS_STORAGE_PATH` environment variable
+2. **PostgreSQL storage**: Enabled by setting `USE_POSTGRES=true` and `DB_URL` environment variables
 
-| Table | Purpose | Primary Key | Fields |
-|-------|---------|-------------|--------|
-| `requests` | Stores individual request records | `id` (auto) | `timestamp`, `process_id`, `action`, `ip`, `duration`, `created_at` |
-| `process_counts` | Aggregated statistics by process | `process_id` | `count`, `total_duration` |
-| `action_counts` | Aggregated statistics by action | `action` | `count`, `total_duration` |
-| `ip_counts` | Counts of requests by IP address | `ip` | `count` |
-| `referrer_counts` | Counts of requests by referrer | `referrer` | `count` |
-| `time_series` | Time-based aggregated metrics | `bucket_time` | `total_requests`, `hour`, `process_counts` (JSON) |
-| `request_details` | Detailed information about requests | `id` (auto) | `process_id`, `timestamp`, `ip`, `referer`, `details` (JSON), `created_at` |
-| `meta` | Server metadata | `key` | `value` |
+### PostgreSQL Metrics Configuration
 
-### Data Flow
+To enable PostgreSQL-based metrics storage, set the following environment variables:
 
-1. When a request is received:
-   - Basic request data is stored in the `requests` table
-   - Aggregated counts are updated in `process_counts` and `action_counts` tables
-   - IP and referrer statistics are updated in their respective tables
-   - Time series data is updated in the appropriate time bucket
+```
+USE_POSTGRES=true
+DB_URL=postgres://username:password@hostname:5432/database
+DB_POOL_SIZE=10  # Optional, defaults to 10
+```
 
-2. For dashboard display:
-   - Recent requests are fetched from the `requests` table
-   - Process and action statistics are retrieved from their respective tables
-   - Time series data is retrieved for chart rendering
+Example AWS RDS connection string:
+```
+DB_URL=postgres://postgres:Password@database-1.cluster-c5oaa2c6cg9n.eu-central-1.rds.amazonaws.com:5432/postgres
+```
 
-3. Database Organization:
-   - Each request is stored as an individual entry in the `requests` table
-   - SQLite's transaction system ensures data integrity during concurrent writes
-   - Time series data is organized in hourly buckets for efficient retrieval and display
+### PostgreSQL Database Schema
 
-### Performance Considerations
+The metrics system uses the following PostgreSQL tables:
 
-- The database uses the WAL (Write-Ahead Logging) journal mode for better concurrency
-- For frequently accessed data like recent requests, an in-memory cache is used
-- Request details are lazily loaded only when needed to reduce database load
-- Indexes are defined on frequently queried fields for faster access
+#### ur_metrics_requests
+
+Stores individual request metrics with timestamp for time-series analysis.
+
+```sql
+CREATE TABLE ur_metrics_requests (
+  id SERIAL PRIMARY KEY,
+  timestamp TIMESTAMPTZ NOT NULL,  -- When the request occurred
+  process_id TEXT,                 -- AO Process ID
+  ip TEXT,                         -- Client IP address
+  action TEXT,                     -- Action from request
+  duration INTEGER,                -- Request duration in ms
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+#### ur_metrics_process_counts
+
+Stores aggregated counts and timing by process ID.
+
+```sql
+CREATE TABLE ur_metrics_process_counts (
+  process_id TEXT PRIMARY KEY,
+  count INTEGER DEFAULT 0,         -- Number of requests
+  total_duration BIGINT DEFAULT 0, -- Total duration of all requests
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+#### ur_metrics_action_counts
+
+Stores aggregated counts and timing by action type.
+
+```sql
+CREATE TABLE ur_metrics_action_counts (
+  action TEXT PRIMARY KEY,
+  count INTEGER DEFAULT 0,         -- Number of requests
+  total_duration BIGINT DEFAULT 0, -- Total duration of all requests
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+#### ur_metrics_ip_counts
+
+Stores count of requests by IP address.
+
+```sql
+CREATE TABLE ur_metrics_ip_counts (
+  ip TEXT PRIMARY KEY,
+  count INTEGER DEFAULT 0,         -- Number of requests
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+#### ur_metrics_referrer_counts
+
+Stores count of requests by referrer.
+
+```sql
+CREATE TABLE ur_metrics_referrer_counts (
+  referrer TEXT PRIMARY KEY,
+  count INTEGER DEFAULT 0,         -- Number of requests
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+#### ur_metrics_time_series
+
+Stores time-bucketed data for charting and time-series analysis.
+
+```sql
+CREATE TABLE ur_metrics_time_series (
+  id SERIAL PRIMARY KEY,
+  timestamp TIMESTAMPTZ NOT NULL,  -- Start of time bucket
+  hour INTEGER NOT NULL,           -- Hour of day (UTC)
+  total_requests INTEGER DEFAULT 0, -- Total requests in this bucket
+  process_counts JSONB DEFAULT '{}'::jsonb, -- Process-specific counts
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(timestamp)
+);
+```
+
+#### ur_metrics_request_details
+
+Stores detailed request information for specific processes.
+
+```sql
+CREATE TABLE ur_metrics_request_details (
+  id SERIAL PRIMARY KEY,
+  process_id TEXT NOT NULL,        -- AO Process ID
+  ip TEXT,                         -- Client IP address
+  referer TEXT,                    -- HTTP Referer header
+  timestamp TIMESTAMPTZ NOT NULL,  -- When the request occurred
+  details JSONB,                   -- Full request details as JSON
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+#### ur_metrics_server_info
+
+Stores server metadata including start time and total request count.
+
+```sql
+CREATE TABLE ur_metrics_server_info (
+  id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1), -- Only one row allowed
+  start_time TIMESTAMPTZ NOT NULL,  -- Server start time
+  total_requests BIGINT DEFAULT 0,  -- Total request count
+  last_updated TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+### Benefits of PostgreSQL Metrics Storage
+
+- **Real-time metrics**: No periodic save/load cycle required
+- **Concurrent access**: Multiple UR instances can write to the same database
+- **Durability**: Metrics survive server restarts without manual save operations
+- **Scalability**: Handles large volumes of metrics data efficiently
+- **Query flexibility**: Advanced filtering and analysis using SQL

@@ -45,7 +45,17 @@ const serverConfigSchema = z.object({
   metricsSaveInterval: z.preprocess((val) => {
     if (!val) return 60 // Default 60 seconds
     return typeof val === 'string' ? parseInt(val) : val
-  }, z.number().positive().optional())
+  }, z.number().positive().optional()),
+  // PostgreSQL database connection settings
+  dbUrl: z.string().url().optional(),
+  usePostgres: z.preprocess(
+    (val) => val === true || val === 'true' || val === '1',
+    z.boolean().optional().default(false)
+  ),
+  dbPoolSize: z.preprocess(
+    (val) => typeof val === 'string' ? parseInt(val) : (val || 10),
+    z.number().positive().optional().default(10)
+  )
 })
 
 /**
@@ -71,7 +81,11 @@ const CONFIG_ENVS = {
     strategy: process.env.STRATEGY || 'proxy',
     surUrl: process.env.SUR_URL,
     metricsStoragePath: process.env.METRICS_STORAGE_PATH,
-    metricsSaveInterval: process.env.METRICS_SAVE_INTERVAL
+    metricsSaveInterval: process.env.METRICS_SAVE_INTERVAL,
+    // PostgreSQL database settings
+    dbUrl: process.env.DB_URL,
+    usePostgres: process.env.USE_POSTGRES || false,
+    dbPoolSize: process.env.DB_POOL_SIZE || 10
   },
   production: {
     MODE,
@@ -84,7 +98,11 @@ const CONFIG_ENVS = {
     strategy: process.env.STRATEGY || 'proxy',
     surUrl: process.env.SUR_URL,
     metricsStoragePath: process.env.METRICS_STORAGE_PATH,
-    metricsSaveInterval: process.env.METRICS_SAVE_INTERVAL
+    metricsSaveInterval: process.env.METRICS_SAVE_INTERVAL,
+    // PostgreSQL database settings
+    dbUrl: process.env.DB_URL,
+    usePostgres: process.env.USE_POSTGRES || false,
+    dbPoolSize: process.env.DB_POOL_SIZE || 10
   }
 }
 

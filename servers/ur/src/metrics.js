@@ -1,53 +1,252 @@
 /**
  * Metrics service for the AO Router
  * Tracks request metrics without interfering with core proxy functionality
- * Uses SQLite database for persistent storage
+ * Supports both file-based storage and PostgreSQL database storage
  */
 import { logger } from './logger.js'
+import fs from 'fs'
+import path from 'path'
 import { config } from './config.js'
 import * as db from './database.js'
 
 const _logger = logger.child('metrics')
 
+// Storage settings
+const STORAGE_PATH = process.env.METRICS_STORAGE_PATH || null
+// Default save interval is 60 seconds, but can be overridden with env var (in seconds)
+const STORAGE_INTERVAL_MS = (parseInt(process.env.METRICS_SAVE_INTERVAL) || 60) * 1000
+
+// Check which storage system to use
+const isPersistentStorageEnabled = !!STORAGE_PATH
+const usePostgres = config.usePostgres && !!config.dbUrl
+
+// Initialize database if enabled
+if (usePostgres) {
+  _logger('PostgreSQL metrics storage enabled. Will initialize connection...')
+  db.initDatabase().then(success => {
+    if (success) {
+      _logger('PostgreSQL metrics storage initialized successfully')
+    } else {
+      _logger('Failed to initialize PostgreSQL metrics storage')
+    }
+  })
+} else if (isPersistentStorageEnabled) {
+  _logger('File-based metrics storage enabled at: %s', STORAGE_PATH)
+  // Create directory if it doesn't exist
+  try {
+    if (!fs.existsSync(STORAGE_PATH)) {
+      fs.mkdirSync(STORAGE_PATH, { recursive: true })
+      _logger('Created metrics storage directory: %s', STORAGE_PATH)
+    }
+  } catch (err) {
+    _logger('Error creating metrics storage directory: %O', err)
+  }
+} else {
+  _logger('Persistent metrics storage disabled. Set METRICS_STORAGE_PATH or DB_URL to enable.')
+}
+
+// Store metrics in memory (will reset on server restart or will be populated from storage)
+const metrics = {
+  // Track recent requests with timestamp, process ID, IP, action, duration
+  recentRequests: [],
+  // Track detailed request info including headers and payload summaries
+  requestDetails: {},
+  // Track counts by process ID
+  processCounts: {},
+  // Track counts by action
+  actionCounts: {},
+  // Track average duration by process ID
+  processTiming: {},
+  // Track average duration by action
+  actionTiming: {},
+  // Track counts by IP address
+  ipCounts: {},
+  // Track counts by referrer
+  referrerCounts: {},
+  // Track counts by time period (hourly)
+  timeSeriesData: [],
+  // Number of total requests
+  totalRequests: 0,
+  // Server start time
+  startTime: new Date().toISOString()
+}
+
 // Maximum number of recent requests to keep
 const MAX_RECENT_REQUESTS = 100
 
-// Time series settings
+// Store a time series of request counts (last 24 hours with hourly buckets)
 const TIME_SERIES_BUCKETS = 24
 const TIME_BUCKET_SIZE_MS = 60 * 60 * 1000 // 1 hour
 
-// In-memory cache for recent requests to avoid frequent database reads
-let recentRequestsCache = []
+// Initialize time series buckets
+function initTimeSeriesBuckets() {
+  const now = Date.now()
+  metrics.timeSeriesData = []
+  
+  for (let i = TIME_SERIES_BUCKETS - 1; i >= 0; i--) {
+    const bucketTime = new Date(now - (i * TIME_BUCKET_SIZE_MS))
+    metrics.timeSeriesData.push({
+      timestamp: bucketTime.toISOString(),
+      hour: bucketTime.getUTCHours(), // Use UTC hours for consistency
+      totalRequests: 0,
+      processCounts: {}
+    })
+  }
+  
+  _logger('Initialized %d time series buckets from %s to %s',
+    metrics.timeSeriesData.length,
+    metrics.timeSeriesData[0].timestamp,
+    metrics.timeSeriesData[metrics.timeSeriesData.length - 1].timestamp);
+}
 
-// Server start time from database or current time if not available
-const startTime = db.getServerStartTime()
+// Initialize time series data
+initTimeSeriesBuckets()
 
-_logger('Metrics initialized with SQLite database storage')
-_logger('Server start time: %s', startTime)
+// Load persisted metrics if available
+loadMetricsFromDisk()
 
 /**
  * Record detailed information about a request
  * @param {Object} details Request details object
  */
-export function recordRequestDetails(details) {
+export async function recordRequestDetails(details) {
   if (!details || !details.processId) return;
   
-  // Store request details in database
-  db.recordRequestDetails(details);
+  const { processId, ip, referer, timestamp } = details;
   
-  _logger('Recorded request details for process %s', details.processId);
+  if (usePostgres && db.isConnected()) {
+    // Store in PostgreSQL
+    try {
+      // Save request details
+      await db.insertRequestDetails(details);
+      
+      // Update IP counts
+      if (ip && ip !== 'unknown') {
+        await db.updateIpCount(ip);
+      }
+      
+      // Update referrer counts
+      if (referer && referer !== 'unknown') {
+        await db.updateReferrerCount(referer);
+      }
+      
+      // Update time series data
+      await db.updateTimeSeriesData(processId, timestamp);
+      
+      // Increment total requests
+      await db.incrementTotalRequests();
+      
+      _logger('Recorded request details for process %s in PostgreSQL', processId);
+    } catch (err) {
+      _logger('Error recording request details in PostgreSQL: %O', err);
+    }
+  } else {
+    // In-memory storage
+    // Store detailed request info keyed by processId
+    if (!metrics.requestDetails[processId]) {
+      metrics.requestDetails[processId] = [];
+    }
+    
+    // Add to details list and limit to 20 requests per process ID
+    metrics.requestDetails[processId].unshift(details);
+    if (metrics.requestDetails[processId].length > 20) {
+      metrics.requestDetails[processId].length = 20;
+    }
+    
+    // Update IP counts
+    if (ip && ip !== 'unknown') {
+      metrics.ipCounts[ip] = (metrics.ipCounts[ip] || 0) + 1;
+    }
+    
+    // Update referrer counts
+    if (referer && referer !== 'unknown') {
+      metrics.referrerCounts[referer] = (metrics.referrerCounts[referer] || 0) + 1;
+    }
+    
+    // Update time series data
+    updateTimeSeriesData(processId, timestamp);
+    
+    // Increment total requests
+    metrics.totalRequests += 1;
+    
+    _logger('Recorded request details for process %s in memory', processId);
+  }
+}
+
+/**
+ * Get a consistent timestamp regardless of timezone
+ * Ensures all timestamps use the same timezone rules
+ * @param {Date|String} date - Date object or ISO string
+ * @returns {Date} Date object normalized to consistent timezone
+ */
+function normalizeTimestamp(date) {
+  // Convert to Date object if it's a string
+  const dateObj = typeof date === 'string' ? new Date(date) : date;
+  // Return the date object directly - consistent handling will be through
+  // toISOString() when storing and parsing back with new Date() when needed
+  return dateObj;
 }
 
 /**
  * Update time series data with a new request
- * This is now handled by the database module
  * @param {String} processId Process ID
  * @param {String} timestamp ISO timestamp string
  */
 function updateTimeSeriesData(processId, timestamp) {
-  // This is now handled directly in the database module
-  // This function remains for compatibility but delegates to database
-  db.updateTimeSeriesData(processId, timestamp);
+  // PostgreSQL implementation is handled in recordRequestDetails function
+  // This in-memory implementation is only used when not using PostgreSQL
+  if (usePostgres && db.isConnected()) return;
+  
+  try {
+    if (!timestamp) {
+      _logger('Warning: Missing timestamp in updateTimeSeriesData');
+      return;
+    }
+
+    const requestTime = normalizeTimestamp(timestamp);
+    
+    // Instead of using current time for bucket calculation,
+    // we'll calculate based on the actual bucket windows
+    
+    // The most recent bucket's end time
+    const newestBucketTime = normalizeTimestamp(metrics.timeSeriesData[metrics.timeSeriesData.length - 1].timestamp);
+    
+    // Is this request newer than our newest bucket? If so, we need new buckets
+    if (requestTime > newestBucketTime) {
+      // Force refresh time series to ensure we have buckets up to current time
+      refreshTimeSeriesData(requestTime);
+    }
+    
+    // Find which bucket this request belongs in by iterating through buckets
+    for (let i = 0; i < metrics.timeSeriesData.length; i++) {
+      const bucketTime = normalizeTimestamp(metrics.timeSeriesData[i].timestamp);
+      const nextBucketTime = i < metrics.timeSeriesData.length - 1 ?
+        normalizeTimestamp(metrics.timeSeriesData[i + 1].timestamp) :
+        new Date(bucketTime.getTime() + TIME_BUCKET_SIZE_MS);
+        
+      if (requestTime >= bucketTime && requestTime < nextBucketTime) {
+        // We found the right bucket, update the counts
+        metrics.timeSeriesData[i].totalRequests += 1;
+        
+        // Update process count in bucket
+        if (!metrics.timeSeriesData[i].processCounts[processId]) {
+          metrics.timeSeriesData[i].processCounts[processId] = 0;
+        }
+        metrics.timeSeriesData[i].processCounts[processId] += 1;
+        
+        _logger('Added request from %s to time bucket %s', 
+          requestTime.toISOString(), 
+          bucketTime.toISOString());
+        return;
+      }
+    }
+    
+    // If we get here, the request must be too old for our buckets
+    _logger('Request time %s outside of current bucket range', requestTime.toISOString());
+    
+  } catch (err) {
+    _logger('Error updating time series data: %O', err);
+  }
 }
 
 /**
@@ -88,7 +287,7 @@ export function startTracking(req) {
  * @param {Object} tracking Request tracking object from startTracking
  * @param {String} action Action from request
  */
-export function finishTracking(tracking, action) {
+export async function finishTracking(tracking, action) {
   if (!tracking || !tracking.startTime) return;
   
   const duration = tracking.duration || (Date.now() - tracking.startTime);
@@ -96,153 +295,411 @@ export function finishTracking(tracking, action) {
   
   if (!processId) return;
   
-  // Create request object
+  // Create request object with consistent timestamp
   const requestData = {
-    timestamp: new Date(tracking.startTime).toISOString(), // Use actual request time
+    timestamp: new Date(tracking.startTime).toISOString(), // Use the actual request start time
     processId,
     ip,
     action,
     duration
   };
   
-  // Record in database
-  db.recordRequest(requestData);
-  
-  // Update in-memory cache for quick access to recent requests
-  recentRequestsCache.unshift(requestData);
-  if (recentRequestsCache.length > MAX_RECENT_REQUESTS) {
-    recentRequestsCache.length = MAX_RECENT_REQUESTS;
+  if (usePostgres && db.isConnected()) {
+    // Store in PostgreSQL
+    try {
+      // Insert the request metrics
+      await db.insertRequestMetrics(requestData);
+      
+      // Update process counts and timing
+      await db.updateProcessCount(processId, duration);
+      
+      // Update action counts and timing if action exists
+      if (action) {
+        await db.updateActionCount(action, duration);
+      }
+      
+      _logger('Recorded metrics for process %s, action %s, duration %dms in PostgreSQL', 
+        processId, action, duration);
+    } catch (err) {
+      _logger('Error recording metrics in PostgreSQL: %O', err);
+      // Fall back to in-memory storage if database operation fails
+      storeMetricsInMemory(requestData, duration);
+    }
+  } else {
+    // Store in memory
+    storeMetricsInMemory(requestData, duration);
   }
-  
-  _logger('Recorded metrics for process %s, action %s, duration %dms', processId, action, duration);
 }
 
-// No need for periodic metrics saving as SQLite handles persistence automatically
-// Refresh time series data every hour to ensure we have current buckets
-setInterval(() => {
-  _logger('Refreshing time series data');
-}, TIME_BUCKET_SIZE_MS);
+/**
+ * Store metrics in memory (fallback for when database is not available)
+ * @param {Object} requestData Request data object
+ * @param {number} duration Request duration in milliseconds
+ */
+function storeMetricsInMemory(requestData, duration) {
+  const { timestamp, processId, ip, action } = requestData;
+  
+  // Add to recent requests (limit size and keep most recent)
+  metrics.recentRequests.unshift(requestData);
+  
+  if (metrics.recentRequests.length > MAX_RECENT_REQUESTS) {
+    metrics.recentRequests.length = MAX_RECENT_REQUESTS;
+  }
+  
+  // Update process counts
+  metrics.processCounts[processId] = (metrics.processCounts[processId] || 0) + 1;
+  
+  // Update action counts if action exists
+  if (action) {
+    metrics.actionCounts[action] = (metrics.actionCounts[action] || 0) + 1;
+  }
+  
+  // Update timing metrics for process
+  if (!metrics.processTiming[processId]) {
+    metrics.processTiming[processId] = {
+      totalDuration: 0,
+      count: 0
+    };
+  }
+  metrics.processTiming[processId].totalDuration += duration;
+  metrics.processTiming[processId].count += 1;
+  
+  // Update timing metrics for action if action exists
+  if (action) {
+    if (!metrics.actionTiming[action]) {
+      metrics.actionTiming[action] = {
+        totalDuration: 0,
+        count: 0
+      };
+    }
+    metrics.actionTiming[action].totalDuration += duration;
+    metrics.actionTiming[action].count += 1;
+  }
+  
+  _logger('Recorded metrics for process %s, action %s, duration %dms in memory', 
+    processId, action, duration);
+}
+
+/**
+ * Refresh time series data by adding a new bucket and removing oldest
+ * @param {Date} [upToTime] Optional timestamp to ensure buckets exist up to
+ */
+function refreshTimeSeriesData(upToTime) {
+  // Use either the provided time or current time
+  const now = upToTime ? upToTime.getTime() : Date.now();
+  
+  // If we have no buckets, initialize the full set
+  if (metrics.timeSeriesData.length === 0) {
+    initTimeSeriesBuckets();
+    return;
+  }
+  
+  // Get the time of the newest bucket
+  const lastBucketTime = new Date(metrics.timeSeriesData[metrics.timeSeriesData.length - 1].timestamp);
+  
+  // Calculate how many new buckets we need to add to reach the current time
+  const timeSinceLastBucket = now - lastBucketTime.getTime();
+  const bucketsToAdd = Math.max(1, Math.ceil(timeSinceLastBucket / TIME_BUCKET_SIZE_MS));
+  
+  _logger('Adding %d new time buckets', bucketsToAdd);
+  
+  // Add the required number of new buckets
+  for (let i = 0; i < bucketsToAdd; i++) {
+    // Calculate the time for this new bucket
+    const newBucketTime = new Date(lastBucketTime.getTime() + ((i + 1) * TIME_BUCKET_SIZE_MS));
+    
+    // Remove oldest bucket if we're at capacity
+    if (metrics.timeSeriesData.length >= TIME_SERIES_BUCKETS) {
+      metrics.timeSeriesData.shift();
+    }
+    
+    // Add new bucket with proper formatting
+    metrics.timeSeriesData.push({
+      timestamp: newBucketTime.toISOString(),
+      hour: newBucketTime.getUTCHours(), // Use UTC hours for consistency
+      totalRequests: 0,
+      processCounts: {}
+    });
+  }
+}
+
+// Refresh time series data every hour
+setInterval(refreshTimeSeriesData, TIME_BUCKET_SIZE_MS);
+
+// Save metrics to disk periodically if storage is enabled
+if (isPersistentStorageEnabled) {
+  // Save immediately on startup
+  setTimeout(() => {
+    _logger('Performing initial metrics save...');
+    saveMetricsToDisk();
+  }, 5000); // Wait 5 seconds for initial metrics collection
+  
+  // Then set up the regular interval
+  setInterval(saveMetricsToDisk, STORAGE_INTERVAL_MS);
+  
+  // Log the save interval for debugging
+  _logger('Metrics will be saved every %d seconds to: %s', STORAGE_INTERVAL_MS / 1000, STORAGE_PATH);
+}
+
+/**
+ * Save current metrics to disk for persistence
+ */
+function saveMetricsToDisk() {
+  // If using PostgreSQL, no need to manually save metrics
+  if (usePostgres && db.isConnected()) {
+    _logger('Using PostgreSQL for metrics storage, no need to save to disk');
+    return;
+  }
+  
+  // Only save to disk if file-based storage is enabled
+  if (!isPersistentStorageEnabled) return;
+  
+  try {
+    const timestamp = new Date().toISOString().replace(/:/g, '-');
+    
+    // Save main metrics file
+    const metricsFilePath = path.join(STORAGE_PATH, 'metrics.json');
+    const metricsBackupPath = path.join(STORAGE_PATH, `metrics-backup-${timestamp}.json`);
+    
+    // Create metrics data for storage
+    const storageData = {
+      version: '1.0',
+      savedAt: new Date().toISOString(),
+      startTime: metrics.startTime,
+      totalRequests: metrics.totalRequests,
+      processCounts: metrics.processCounts,
+      actionCounts: metrics.actionCounts,
+      processTiming: metrics.processTiming,
+      actionTiming: metrics.actionTiming,
+      ipCounts: metrics.ipCounts,
+      referrerCounts: metrics.referrerCounts,
+      timeSeriesData: metrics.timeSeriesData
+    };
+    
+    // Save main file
+    fs.writeFileSync(metricsFilePath, JSON.stringify(storageData, null, 2));
+    
+    // Save backup file (once per hour)
+    if (new Date().getMinutes() === 0) {
+      fs.writeFileSync(metricsBackupPath, JSON.stringify(storageData, null, 2));
+      
+      // Clean up old backups (keep last 24)
+      cleanupOldBackups();
+    }
+    
+    _logger('Metrics saved to disk successfully');
+  } catch (err) {
+    _logger('Error saving metrics to disk: %O', err);
+  }
+}
+
+/**
+ * Load metrics from storage (either PostgreSQL or disk)
+ */
+async function loadMetricsFromDisk() {
+  // If using PostgreSQL, load initial data from the database
+  if (usePostgres && db.isConnected()) {
+    try {
+      _logger('Loading initial metrics data from PostgreSQL...');
+      
+      // Get server info for start time and total requests
+      const serverInfo = await db.getServerInfo();
+      metrics.startTime = serverInfo.startTime || metrics.startTime;
+      metrics.totalRequests = serverInfo.totalRequests || 0;
+      
+      // We don't need to load other metrics as they'll be queried directly from the database
+      // when needed through the getMetrics function
+      
+      _logger('Loaded metrics from PostgreSQL: %d total requests', metrics.totalRequests);
+      return;
+    } catch (err) {
+      _logger('Error loading metrics from PostgreSQL: %O', err);
+      _logger('Falling back to file-based storage if available');
+    }
+  }
+  
+  // Fall back to file-based storage if PostgreSQL failed or is not enabled
+  if (!isPersistentStorageEnabled) return;
+  
+  try {
+    const metricsFilePath = path.join(STORAGE_PATH, 'metrics.json');
+    
+    if (fs.existsSync(metricsFilePath)) {
+      const fileContent = fs.readFileSync(metricsFilePath, 'utf8');
+      const savedData = JSON.parse(fileContent);
+      
+      // Merge saved data with current metrics
+      metrics.startTime = savedData.startTime || metrics.startTime;
+      metrics.totalRequests = savedData.totalRequests || 0;
+      metrics.processCounts = savedData.processCounts || {};
+      metrics.actionCounts = savedData.actionCounts || {};
+      metrics.processTiming = savedData.processTiming || {};
+      metrics.actionTiming = savedData.actionTiming || {};
+      metrics.ipCounts = savedData.ipCounts || {};
+      metrics.referrerCounts = savedData.referrerCounts || {};
+      
+      // Only load time series data if format matches
+      if (Array.isArray(savedData.timeSeriesData) && savedData.timeSeriesData.length === TIME_SERIES_BUCKETS) {
+        metrics.timeSeriesData = savedData.timeSeriesData;
+      }
+      
+      _logger('Loaded metrics from disk: %d total requests restored', metrics.totalRequests);
+    } else {
+      _logger('No saved metrics file found, starting with empty metrics');
+    }
+  } catch (err) {
+    _logger('Error loading metrics from disk: %O', err);
+  }
+}
+
+/**
+ * Clean up old backup files, keeping only the most recent 24
+ */
+function cleanupOldBackups() {
+  try {
+    const backupFiles = fs.readdirSync(STORAGE_PATH)
+      .filter(file => file.startsWith('metrics-backup-'))
+      .sort()
+      .reverse(); // Most recent first
+    
+    // Keep the 24 most recent backups
+    if (backupFiles.length > 24) {
+      const filesToDelete = backupFiles.slice(24);
+      
+      filesToDelete.forEach(file => {
+        fs.unlinkSync(path.join(STORAGE_PATH, file));
+      });
+      
+      _logger('Cleaned up %d old backup files', filesToDelete.length);
+    }
+  } catch (err) {
+    _logger('Error cleaning up old backup files: %O', err);
+  }
+}
 
 /**
  * Get all metrics for dashboard display
- * @returns {Object} All metrics
+ * @returns {Promise<Object>} All metrics
  */
-export function getMetrics() {
-  try {
-    _logger('Fetching metrics for dashboard display');
-    
-    // Use cached recent requests or fetch from database
-    const recentRequests = recentRequestsCache.length > 0 ? 
-      recentRequestsCache : db.getRecentRequests(MAX_RECENT_REQUESTS);
-    
-    // Update cache if needed
-    if (recentRequestsCache.length === 0 && recentRequests.length > 0) {
-      recentRequestsCache = recentRequests;
-    }
-    
-    // Get process and action counts from database
-    const processCounts = db.getProcessCounts();
-    const actionCounts = db.getActionCounts();
-    
-    // Get timing metrics from database
-    const processTiming = db.getProcessTiming();
-    const actionTiming = db.getActionTiming();
-    
-    // Add average durations for easier display
-    const processTimingWithAvg = {};
-    Object.entries(processTiming).forEach(([processId, data]) => {
-      processTimingWithAvg[processId] = {
-        ...data,
-        avgDuration: data.count > 0 ? data.totalDuration / data.count : 0
+export async function getMetrics() {
+  if (usePostgres && db.isConnected()) {
+    try {
+      // Get metrics from PostgreSQL
+      const [recentRequests, processCounts, actionCounts, ipCounts, referrerCounts, 
+             processTiming, actionTiming, timeSeriesData, serverInfo] = await Promise.all([
+        db.getRecentRequests(MAX_RECENT_REQUESTS),
+        db.getProcessCounts(),
+        db.getActionCounts(),
+        db.getIpCounts(),
+        db.getReferrerCounts(),
+        db.getProcessTiming(),
+        db.getActionTiming(),
+        db.getTimeSeriesData(TIME_SERIES_BUCKETS),
+        db.getServerInfo()
+      ]);
+      
+      // Calculate average durations for database results
+      const processTimingWithAvg = {};
+      Object.keys(processTiming).forEach(processId => {
+        const { totalDuration, count } = processTiming[processId];
+        processTimingWithAvg[processId] = {
+          totalDuration,
+          count,
+          avgDuration: count > 0 ? totalDuration / count : 0
+        };
+      });
+      
+      const actionTimingWithAvg = {};
+      Object.keys(actionTiming).forEach(action => {
+        const { totalDuration, count } = actionTiming[action];
+        actionTimingWithAvg[action] = {
+          totalDuration,
+          count,
+          avgDuration: count > 0 ? totalDuration / count : 0
+        };
+      });
+      
+      // Get top IPs and top referrers
+      const topIps = Object.entries(ipCounts)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 10);
+        
+      const topReferrers = Object.entries(referrerCounts)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 10);
+      
+      return {
+        recentRequests,
+        processCounts,
+        actionCounts,
+        processTiming: processTimingWithAvg,
+        actionTiming: actionTimingWithAvg,
+        ipCounts: topIps,
+        referrerCounts: topReferrers,
+        timeSeriesData,
+        totalRequests: serverInfo.totalRequests || 0,
+        startTime: serverInfo.startTime || new Date().toISOString(),
+        serverTime: new Date().toISOString(),
+        storageType: 'postgresql'
       };
-    });
-    
-    const actionTimingWithAvg = {};
-    Object.entries(actionTiming).forEach(([action, data]) => {
-      actionTimingWithAvg[action] = {
-        ...data,
-        avgDuration: data.count > 0 ? data.totalDuration / data.count : 0
-      };
-    });
-    
-    // Get IP and referrer counts from database
-    const ipCountsObj = db.getIpCounts();
-    const referrerCountsObj = db.getReferrerCounts();
-    
-    // Convert to arrays of [key, value] pairs for the dashboard renderer
-    const ipCounts = Object.entries(ipCountsObj)
-      .sort((a, b) => b[1] - a[1]) // Sort by count descending
-      .slice(0, 10); // Take top 10
-      
-    const referrerCounts = Object.entries(referrerCountsObj)
-      .sort((a, b) => b[1] - a[1]) // Sort by count descending
-      .slice(0, 10); // Take top 10
-    
-    // Get time series data from database
-    const timeSeriesData = db.getTimeSeriesData(TIME_SERIES_BUCKETS);
-    
-    // Build request details object by process ID
-    const requestDetails = {};
-    
-    // Only populate request details for processes that have recent requests
-    // This avoids loading all details at once, which could be inefficient
-    const processIds = Object.keys(processCounts).slice(0, 20); // Limit to 20 most recent processes
-    for (const processId of processIds) {
-      // Fetch details for this process
-      requestDetails[processId] = db.getRequestDetails(processId, 20);
+    } catch (err) {
+      _logger('Error getting metrics from PostgreSQL: %O', err);
+      // Fall back to in-memory metrics if database query fails
+      return getInMemoryMetrics();
     }
-    
-    _logger('Successfully retrieved metrics for dashboard');
-    
-    return {
-      // Recent requests 
-      recentRequests,
-      
-      // Request details keyed by process ID
-      requestDetails,
-      
-      // Process counts for histogram
-      processCounts,
-      
-      // Action counts for histogram
-      actionCounts,
-      
-      // Process timing metrics (total duration and count)
-      processTiming: processTimingWithAvg,
-      
-      // Action timing metrics (total duration and count)
-      actionTiming: actionTimingWithAvg,
-      
-      // IP address counts
-      ipCounts,
-      
-      // Referrer counts
-      referrerCounts,
-      
-      // Time series data for charts
-      timeSeriesData,
-      
-      // Total number of requests
-      totalRequests: db.getTotalRequests(),
-      
-      // Server start time
-      startTime
-    };
-  } catch (err) {
-    _logger('Error retrieving metrics: %O', err);
-    // Return empty metrics rather than crashing
-    return {
-      recentRequests: [],
-      requestDetails: {},
-      processCounts: {},
-      actionCounts: {},
-      processTiming: {},
-      actionTiming: {},
-      ipCounts: [], // Return empty array rather than empty object
-      referrerCounts: [], // Return empty array rather than empty object
-      timeSeriesData: [],
-      totalRequests: 0,
-      startTime
-    };
+  } else {
+    // Return in-memory metrics
+    return getInMemoryMetrics();
   }
+}
+
+/**
+ * Get metrics from in-memory storage
+ * @returns {Object} In-memory metrics
+ */
+function getInMemoryMetrics() {
+  // Calculate average durations for easier display
+  const processTimingWithAvg = {};
+  Object.keys(metrics.processTiming).forEach(processId => {
+    const { totalDuration, count } = metrics.processTiming[processId];
+    processTimingWithAvg[processId] = {
+      totalDuration,
+      count,
+      avgDuration: count > 0 ? totalDuration / count : 0
+    };
+  });
+  
+  const actionTimingWithAvg = {};
+  Object.keys(metrics.actionTiming).forEach(action => {
+    const { totalDuration, count } = metrics.actionTiming[action];
+    actionTimingWithAvg[action] = {
+      totalDuration,
+      count,
+      avgDuration: count > 0 ? totalDuration / count : 0
+    };
+  });
+  
+  // Get top IPs and top referrers
+  const topIps = Object.entries(metrics.ipCounts)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 10);
+    
+  const topReferrers = Object.entries(metrics.referrerCounts)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 10);
+  
+  return {
+    recentRequests: metrics.recentRequests,
+    processCounts: metrics.processCounts,
+    actionCounts: metrics.actionCounts,
+    processTiming: processTimingWithAvg,
+    actionTiming: actionTimingWithAvg,
+    ipCounts: topIps,
+    referrerCounts: topReferrers,
+    timeSeriesData: metrics.timeSeriesData,
+    totalRequests: metrics.totalRequests,
+    startTime: metrics.startTime,
+    serverTime: new Date().toISOString(),
+    storageType: 'memory'
+  };
 }

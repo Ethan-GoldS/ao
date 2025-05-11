@@ -1,622 +1,687 @@
 /**
- * SQLite database manager for AO Router metrics
- * Handles database connection, table creation, and query operations
+ * PostgreSQL database connection and operations for AO Universal Router
  */
-import BetterSqlite3 from 'better-sqlite3'
-import path from 'path'
-import fs from 'fs'
+import pg from 'pg'
+import format from 'pg-format'
 import { logger } from './logger.js'
 import { config } from './config.js'
 
 const _logger = logger.child('database')
 
-// Determine appropriate database path with fallbacks for different environments
-function getDatabasePath() {
-  // First try from config
-  if (config.metricsStoragePath) {
-    const configPath = config.metricsStoragePath;
-    _logger('Config specified database path: %s', configPath);
-    
-    // Check if the path is a directory or includes a filename
-    let dbPath;
-    
-    try {
-      if (fs.existsSync(configPath)) {
-        const stats = fs.statSync(configPath);
-        
-        if (stats.isDirectory()) {
-          // It's a directory, append the default filename
-          dbPath = path.join(configPath, 'metrics.db');
-          _logger('Config path is a directory, using file: %s', dbPath);
-        } else {
-          // It's a file path, use as is
-          dbPath = configPath;
-          _logger('Using specified file path: %s', dbPath);
-        }
-        
-        // Verify we can write to this location
-        const testFile = path.join(path.dirname(dbPath), '.write-test');
-        try {
-          fs.writeFileSync(testFile, 'test');
-          fs.unlinkSync(testFile);
-          _logger('Confirmed write access to: %s', path.dirname(dbPath));
-          return dbPath;
-        } catch (err) {
-          _logger('Cannot write to specified path %s: %s', dbPath, err.message);
-        }
-      } else {
-        // Path doesn't exist yet, try to create the directory structure
-        const dirPath = path.dirname(configPath);
-        
-        try {
-          fs.mkdirSync(dirPath, { recursive: true });
-          _logger('Created directory: %s', dirPath);
-          
-          // If it's a directory path (ends with / or \), append filename
-          if (configPath.endsWith('/') || configPath.endsWith('\\')) {
-            dbPath = path.join(configPath, 'metrics.db');
-          } else {
-            dbPath = configPath;
-          }
-          
-          // Test we can write to it
-          const testFile = path.join(dirPath, '.write-test');
-          fs.writeFileSync(testFile, 'test');
-          fs.unlinkSync(testFile);
-          _logger('Confirmed write access to created directory: %s', dirPath);
-          return dbPath;
-        } catch (err) {
-          _logger('Failed to create or write to directory %s: %s', dirPath, err.message);
-        }
-      }
-    } catch (err) {
-      _logger('Error checking config path %s: %s', configPath, err.message);
-    }
-    
-    _logger('WARNING: Could not use specified database path from config, falling back to alternatives');
-  }
-  
-  // If we get here, the config path didn't work, try fallbacks
-  let dbPath;
-  
-  // Try standard locations with different fallbacks depending on platform
-  if (process.platform === 'win32') {
-    // Windows - use current directory
-    dbPath = './data/metrics.db';
-    _logger('Using Windows fallback path: %s', path.resolve(dbPath));
-  } else {
-    // Linux/Unix - try multiple locations with permission checks
-    const possiblePaths = [
-      './data/metrics.db',                // Current directory
-      '/tmp/aorouter-metrics.db',        // System temp directory
-      path.join(process.env.HOME || '.', '.ao-router-metrics.db') // User home directory
-    ];
-    
-    _logger('Trying Unix/Linux fallback paths...');
-    
-    // Find first writable path
-    for (const testPath of possiblePaths) {
-      const testDir = path.dirname(testPath);
-      try {
-        // Check if directory exists and is writable
-        if (fs.existsSync(testDir)) {
-          // Try to write a test file
-          const testFile = path.join(testDir, '.write-test');
-          fs.writeFileSync(testFile, 'test');
-          fs.unlinkSync(testFile); // Remove test file
-          dbPath = testPath;
-          _logger('Using fallback path with confirmed write access: %s', path.resolve(dbPath));
-          break;
-        } else {
-          // Try to create directory
-          fs.mkdirSync(testDir, { recursive: true });
-          dbPath = testPath;
-          _logger('Created directory for fallback path: %s', path.resolve(dbPath));
-          break;
-        }
-      } catch (e) {
-        _logger('Path %s is not writable: %s', testDir, e.message);
-        // Continue to next option
-      }
-    }
-  }
-  
-  // If we still don't have a path, use in-memory database as last resort
-  if (!dbPath) {
-    _logger('WARNING: No writable location found for SQLite database, using in-memory database');
-    return ':memory:';
-  }
-  
-  return dbPath;
-}
+let pool = null
 
-// Get appropriate database path
-const DB_PATH = getDatabasePath();
+/**
+ * Initialize the database connection pool
+ */
+export async function initDatabase() {
+  if (!config.usePostgres || !config.dbUrl) {
+    _logger('PostgreSQL storage disabled. Set USE_POSTGRES=true and DB_URL to enable.')
+    return false
+  }
 
-// Create directory if it doesn't exist
-if (DB_PATH !== ':memory:') {
-  const dbDir = path.dirname(DB_PATH);
   try {
-    if (!fs.existsSync(dbDir)) {
-      fs.mkdirSync(dbDir, { recursive: true });
-      _logger('Created database directory: %s', dbDir);
-    }
+    // Create connection pool
+    pool = new pg.Pool({
+      connectionString: config.dbUrl,
+      max: config.dbPoolSize,
+      idleTimeoutMillis: 30000,
+      connectionTimeoutMillis: 5000,
+    })
+
+    // Test connection
+    const client = await pool.connect()
+    const result = await client.query('SELECT NOW()')
+    client.release()
+
+    _logger('Connected to PostgreSQL: %s', result.rows[0].now)
+    
+    // Initialize tables
+    await createTables()
+    
+    return true
   } catch (err) {
-    _logger('Error creating database directory: %O', err);
-    // Continue - we'll handle the error during connection
+    _logger('Failed to connect to PostgreSQL: %O', err)
+    return false
   }
 }
 
-// Initialize database connection
-let db;
-let connectionAttempts = 0;
-const MAX_ATTEMPTS = 3;
-
-while (connectionAttempts < MAX_ATTEMPTS) {
+/**
+ * Create necessary database tables if they don't exist
+ */
+async function createTables() {
+  const client = await pool.connect()
+  
   try {
-    connectionAttempts++;
-    db = new BetterSqlite3(DB_PATH, { 
-      fileMustExist: false,
-      verbose: process.env.DEBUG ? console.log : null
-    });
-    _logger('Connected to SQLite database at %s', DB_PATH);
-    break; // Success, exit the loop
+    // Start transaction
+    await client.query('BEGIN')
+    
+    // Create requests table
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS ur_metrics_requests (
+        id SERIAL PRIMARY KEY,
+        timestamp TIMESTAMPTZ NOT NULL,
+        process_id TEXT,
+        ip TEXT,
+        action TEXT,
+        duration INTEGER,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `)
+    
+    // Create process counts table
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS ur_metrics_process_counts (
+        process_id TEXT PRIMARY KEY,
+        count INTEGER DEFAULT 0,
+        total_duration BIGINT DEFAULT 0,
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `)
+    
+    // Create action counts table
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS ur_metrics_action_counts (
+        action TEXT PRIMARY KEY,
+        count INTEGER DEFAULT 0,
+        total_duration BIGINT DEFAULT 0,
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `)
+    
+    // Create IP counts table
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS ur_metrics_ip_counts (
+        ip TEXT PRIMARY KEY,
+        count INTEGER DEFAULT 0,
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `)
+    
+    // Create referrer counts table
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS ur_metrics_referrer_counts (
+        referrer TEXT PRIMARY KEY,
+        count INTEGER DEFAULT 0,
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `)
+    
+    // Create time series data table
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS ur_metrics_time_series (
+        id SERIAL PRIMARY KEY,
+        timestamp TIMESTAMPTZ NOT NULL,
+        hour INTEGER NOT NULL,
+        total_requests INTEGER DEFAULT 0,
+        process_counts JSONB DEFAULT '{}'::jsonb,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE(timestamp)
+      )
+    `)
+    
+    // Create request details table
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS ur_metrics_request_details (
+        id SERIAL PRIMARY KEY,
+        process_id TEXT NOT NULL,
+        ip TEXT,
+        referer TEXT,
+        timestamp TIMESTAMPTZ NOT NULL,
+        details JSONB,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `)
+    
+    // Create index on process_id for request details
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_request_details_process_id 
+      ON ur_metrics_request_details(process_id)
+    `)
+    
+    // Create index on timestamp for requests
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_requests_timestamp 
+      ON ur_metrics_requests(timestamp)
+    `)
+    
+    // Create server info table for metadata
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS ur_metrics_server_info (
+        id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1), -- Only one row allowed
+        start_time TIMESTAMPTZ NOT NULL,
+        total_requests BIGINT DEFAULT 0,
+        last_updated TIMESTAMPTZ DEFAULT NOW()
+      )
+    `)
+    
+    // Commit transaction
+    await client.query('COMMIT')
+    
+    _logger('Database tables initialized successfully')
   } catch (err) {
-    _logger('Attempt %d: Error connecting to SQLite database at %s: %O', 
-      connectionAttempts, DB_PATH, err);
-    
-    if (connectionAttempts >= MAX_ATTEMPTS) {
-      _logger('All connection attempts failed, falling back to in-memory database');
-      try {
-        db = new BetterSqlite3(':memory:');
-        _logger('Connected to in-memory SQLite database (WARNING: data will not persist)');
-      } catch (memErr) {
-        _logger('Fatal error: Could not even create in-memory database: %O', memErr);
-        throw memErr;
-      }
-    }
+    await client.query('ROLLBACK')
+    _logger('Error initializing database tables: %O', err)
+    throw err
+  } finally {
+    client.release()
   }
-}
-
-// Create tables if they don't exist
-function initializeDatabase() {
-  db.pragma('journal_mode = WAL')
-  db.pragma('synchronous = NORMAL')
-  
-  // Create requests table for storing individual request records
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS requests (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      timestamp TEXT NOT NULL,
-      process_id TEXT NOT NULL,
-      action TEXT,
-      ip TEXT,
-      duration INTEGER,
-      created_at TEXT DEFAULT CURRENT_TIMESTAMP
-    )
-  `)
-  
-  // Create process_counts table for aggregated process statistics
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS process_counts (
-      process_id TEXT PRIMARY KEY,
-      count INTEGER NOT NULL DEFAULT 0,
-      total_duration INTEGER NOT NULL DEFAULT 0
-    )
-  `)
-  
-  // Create action_counts table for aggregated action statistics
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS action_counts (
-      action TEXT PRIMARY KEY,
-      count INTEGER NOT NULL DEFAULT 0,
-      total_duration INTEGER NOT NULL DEFAULT 0
-    )
-  `)
-  
-  // Create ip_counts table for aggregated IP statistics
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS ip_counts (
-      ip TEXT PRIMARY KEY,
-      count INTEGER NOT NULL DEFAULT 0
-    )
-  `)
-  
-  // Create referrer_counts table for tracking referrers
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS referrer_counts (
-      referrer TEXT PRIMARY KEY,
-      count INTEGER NOT NULL DEFAULT 0
-    )
-  `)
-  
-  // Create time_series table for storing aggregated time-based metrics
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS time_series (
-      bucket_time TEXT PRIMARY KEY,
-      total_requests INTEGER NOT NULL DEFAULT 0,
-      hour INTEGER NOT NULL,
-      process_counts TEXT     -- JSON string of process counts
-    )
-  `)
-  
-  // Create request_details table for storing detailed request information
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS request_details (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      process_id TEXT NOT NULL,
-      timestamp TEXT NOT NULL,
-      ip TEXT,
-      referer TEXT,
-      details TEXT,          -- JSON string of additional details
-      created_at TEXT DEFAULT CURRENT_TIMESTAMP
-    )
-  `)
-  
-  // Create meta table for storing server metadata
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS meta (
-      key TEXT PRIMARY KEY,
-      value TEXT NOT NULL
-    )
-  `)
-  
-  _logger('Database tables initialized')
-  
-  // Initialize meta data for server start time if not exists
-  const startTime = db.prepare('SELECT value FROM meta WHERE key = ?').get('start_time')
-  if (!startTime) {
-    db.prepare('INSERT INTO meta (key, value) VALUES (?, ?)').run('start_time', new Date().toISOString())
-    _logger('Server start time initialized in database')
-  }
-}
-
-// Initialize the database
-initializeDatabase()
-
-/**
- * Get the server start time from the database
- * @returns {string} ISO timestamp string of server start time
- */
-export function getServerStartTime() {
-  const result = db.prepare('SELECT value FROM meta WHERE key = ?').get('start_time')
-  return result ? result.value : new Date().toISOString()
 }
 
 /**
- * Record a new request in the database
- * @param {Object} requestData Request data to record
- * @returns {number} ID of the inserted request
+ * Insert request metrics into the database
+ * @param {Object} request Request metrics object
+ * @returns {Promise<boolean>} Success flag
  */
-export function recordRequest(requestData) {
-  const { timestamp, processId, action, ip, duration } = requestData
+export async function insertRequestMetrics(request) {
+  if (!pool) return false
   
-  // Insert request record
-  const insertRequest = db.prepare(`
-    INSERT INTO requests (timestamp, process_id, action, ip, duration)
-    VALUES (?, ?, ?, ?, ?)
-  `)
-  
-  const result = insertRequest.run(timestamp, processId, action, ip, duration)
-  
-  // Update process counts (upsert)
-  const updateProcessCount = db.prepare(`
-    INSERT INTO process_counts (process_id, count, total_duration)
-    VALUES (?, 1, ?)
-    ON CONFLICT(process_id) DO UPDATE 
-    SET count = count + 1,
-        total_duration = total_duration + ?
-  `)
-  
-  updateProcessCount.run(processId, duration, duration)
-  
-  // Update action counts if action exists
-  if (action) {
-    const updateActionCount = db.prepare(`
-      INSERT INTO action_counts (action, count, total_duration)
-      VALUES (?, 1, ?)
-      ON CONFLICT(action) DO UPDATE 
-      SET count = count + 1,
-          total_duration = total_duration + ?
-    `)
-    
-    updateActionCount.run(action, duration, duration)
-  }
-  
-  // Update IP counts if IP exists
-  if (ip) {
-    const updateIpCount = db.prepare(`
-      INSERT INTO ip_counts (ip, count)
-      VALUES (?, 1)
-      ON CONFLICT(ip) DO UPDATE SET count = count + 1
-    `)
-    
-    updateIpCount.run(ip)
-  }
-  
-  return result.lastInsertRowid
-}
-
-/**
- * Record detailed information about a request
- * @param {Object} details Request details
- */
-export function recordRequestDetails(details) {
-  if (!details || !details.processId) return
-  
-  const { processId, ip, referer, timestamp } = details
-  
-  // Store as JSON string for additional details
-  const detailsJson = JSON.stringify(details)
-  
-  // Insert request details
-  const insertDetails = db.prepare(`
-    INSERT INTO request_details (process_id, timestamp, ip, referer, details)
-    VALUES (?, ?, ?, ?, ?)
-  `)
-  
-  insertDetails.run(processId, timestamp, ip, referer, detailsJson)
-  
-  // Update referrer counts if referrer exists
-  if (referer) {
-    const updateRefererCount = db.prepare(`
-      INSERT INTO referrer_counts (referrer, count)
-      VALUES (?, 1)
-      ON CONFLICT(referrer) DO UPDATE SET count = count + 1
-    `)
-    
-    updateRefererCount.run(referer)
-  }
-  
-  // Update time series data with timestamp
-  updateTimeSeriesData(processId, timestamp)
-}
-
-/**
- * Update time series data with a new request
- * @param {String} processId Process ID
- * @param {String} timestamp ISO timestamp string
- */
-export function updateTimeSeriesData(processId, timestamp) {
   try {
-    if (!timestamp) return
+    const { timestamp, processId, ip, action, duration } = request
     
-    // Parse the timestamp as UTC
-    const requestDate = new Date(timestamp)
+    const result = await pool.query(
+      'INSERT INTO ur_metrics_requests(timestamp, process_id, ip, action, duration) VALUES($1, $2, $3, $4, $5) RETURNING id',
+      [new Date(timestamp), processId, ip, action, duration]
+    )
     
-    // Create bucket time string rounded to the hour, ensuring UTC consistency
-    // by using UTC methods throughout
-    const bucketDate = new Date(Date.UTC(
-      requestDate.getUTCFullYear(),
-      requestDate.getUTCMonth(),
-      requestDate.getUTCDate(),
-      requestDate.getUTCHours(),
+    return result.rows.length > 0
+  } catch (err) {
+    _logger('Error inserting request metrics: %O', err)
+    return false
+  }
+}
+
+/**
+ * Insert or update process count
+ * @param {string} processId Process ID
+ * @param {number} duration Request duration in ms
+ * @returns {Promise<boolean>} Success flag
+ */
+export async function updateProcessCount(processId, duration) {
+  if (!pool || !processId) return false
+  
+  try {
+    await pool.query(`
+      INSERT INTO ur_metrics_process_counts(process_id, count, total_duration, updated_at)
+      VALUES($1, 1, $2, NOW())
+      ON CONFLICT (process_id) 
+      DO UPDATE SET 
+        count = ur_metrics_process_counts.count + 1,
+        total_duration = ur_metrics_process_counts.total_duration + $2,
+        updated_at = NOW()
+    `, [processId, duration])
+    
+    return true
+  } catch (err) {
+    _logger('Error updating process count: %O', err)
+    return false
+  }
+}
+
+/**
+ * Insert or update action count
+ * @param {string} action Action name
+ * @param {number} duration Request duration in ms
+ * @returns {Promise<boolean>} Success flag
+ */
+export async function updateActionCount(action, duration) {
+  if (!pool || !action) return false
+  
+  try {
+    await pool.query(`
+      INSERT INTO ur_metrics_action_counts(action, count, total_duration, updated_at)
+      VALUES($1, 1, $2, NOW())
+      ON CONFLICT (action) 
+      DO UPDATE SET 
+        count = ur_metrics_action_counts.count + 1,
+        total_duration = ur_metrics_action_counts.total_duration + $2,
+        updated_at = NOW()
+    `, [action, duration])
+    
+    return true
+  } catch (err) {
+    _logger('Error updating action count: %O', err)
+    return false
+  }
+}
+
+/**
+ * Insert or update IP count
+ * @param {string} ip IP address
+ * @returns {Promise<boolean>} Success flag
+ */
+export async function updateIpCount(ip) {
+  if (!pool || !ip || ip === 'unknown') return false
+  
+  try {
+    await pool.query(`
+      INSERT INTO ur_metrics_ip_counts(ip, count, updated_at)
+      VALUES($1, 1, NOW())
+      ON CONFLICT (ip) 
+      DO UPDATE SET 
+        count = ur_metrics_ip_counts.count + 1,
+        updated_at = NOW()
+    `, [ip])
+    
+    return true
+  } catch (err) {
+    _logger('Error updating IP count: %O', err)
+    return false
+  }
+}
+
+/**
+ * Insert or update referrer count
+ * @param {string} referrer Referrer URL
+ * @returns {Promise<boolean>} Success flag
+ */
+export async function updateReferrerCount(referrer) {
+  if (!pool || !referrer || referrer === 'unknown') return false
+  
+  try {
+    await pool.query(`
+      INSERT INTO ur_metrics_referrer_counts(referrer, count, updated_at)
+      VALUES($1, 1, NOW())
+      ON CONFLICT (referrer) 
+      DO UPDATE SET 
+        count = ur_metrics_referrer_counts.count + 1,
+        updated_at = NOW()
+    `, [referrer])
+    
+    return true
+  } catch (err) {
+    _logger('Error updating referrer count: %O', err)
+    return false
+  }
+}
+
+/**
+ * Insert request details
+ * @param {Object} details Request details object
+ * @returns {Promise<boolean>} Success flag
+ */
+export async function insertRequestDetails(details) {
+  if (!pool || !details || !details.processId) return false
+  
+  try {
+    const { processId, ip, referer, timestamp } = details
+    
+    // Store detailed info as JSON, limiting to 20 entries per process
+    await pool.query(`
+      INSERT INTO ur_metrics_request_details(process_id, ip, referer, timestamp, details)
+      VALUES($1, $2, $3, $4, $5)
+    `, [processId, ip, referer, new Date(timestamp), JSON.stringify(details)])
+    
+    // Limit to 20 most recent records per process_id
+    await pool.query(`
+      WITH ranked_details AS (
+        SELECT id, ROW_NUMBER() OVER (PARTITION BY process_id ORDER BY timestamp DESC) as rn
+        FROM ur_metrics_request_details
+        WHERE process_id = $1
+      )
+      DELETE FROM ur_metrics_request_details
+      WHERE id IN (
+        SELECT id FROM ranked_details WHERE rn > 20
+      )
+    `, [processId])
+    
+    return true
+  } catch (err) {
+    _logger('Error inserting request details: %O', err)
+    return false
+  }
+}
+
+/**
+ * Update time series data for a request
+ * @param {string} processId Process ID
+ * @param {string} timestamp ISO timestamp string
+ * @returns {Promise<boolean>} Success flag
+ */
+export async function updateTimeSeriesData(processId, timestamp) {
+  if (!pool || !processId || !timestamp) return false
+  
+  try {
+    const requestTime = new Date(timestamp)
+    
+    // Round down to the nearest hour for consistent bucketing
+    const bucketTime = new Date(
+      requestTime.getFullYear(),
+      requestTime.getMonth(),
+      requestTime.getDate(),
+      requestTime.getHours(),
       0, 0, 0
-    ))
+    )
     
-    const bucketTime = bucketDate.toISOString()
-    const hour = bucketDate.getUTCHours()
+    // Update or insert time bucket
+    await pool.query(`
+      INSERT INTO ur_metrics_time_series(timestamp, hour, total_requests, process_counts)
+      VALUES($1, $2, 1, jsonb_build_object($3, 1))
+      ON CONFLICT (timestamp)
+      DO UPDATE SET
+        total_requests = ur_metrics_time_series.total_requests + 1,
+        process_counts = 
+          CASE
+            WHEN ur_metrics_time_series.process_counts ? $3 THEN
+              jsonb_set(
+                ur_metrics_time_series.process_counts,
+                ARRAY[$3],
+                to_jsonb((ur_metrics_time_series.process_counts->>$3)::int + 1)
+              )
+            ELSE
+              ur_metrics_time_series.process_counts || jsonb_build_object($3, 1)
+          END
+    `, [bucketTime, bucketTime.getUTCHours(), processId])
     
-    _logger('Request time %s mapped to bucket %s', timestamp, bucketTime)
-    
-    // Get current process counts for this bucket if exists
-    const currentBucket = db.prepare('SELECT process_counts FROM time_series WHERE bucket_time = ?').get(bucketTime)
-    
-    let processCounts = {}
-    if (currentBucket && currentBucket.process_counts) {
-      processCounts = JSON.parse(currentBucket.process_counts)
-    }
-    
-    // Update process count
-    processCounts[processId] = (processCounts[processId] || 0) + 1
-    
-    // Upsert time series bucket
-    const upsertBucket = db.prepare(`
-      INSERT INTO time_series (bucket_time, hour, total_requests, process_counts)
-      VALUES (?, ?, 1, ?)
-      ON CONFLICT(bucket_time) DO UPDATE 
-      SET total_requests = total_requests + 1,
-          process_counts = ?
-    `)
-    
-    const processCountsJson = JSON.stringify(processCounts)
-    upsertBucket.run(bucketTime, hour, processCountsJson, processCountsJson)
-    
+    return true
   } catch (err) {
     _logger('Error updating time series data: %O', err)
+    return false
   }
 }
 
 /**
- * Get recent requests from the database
- * @param {number} limit Max number of requests to retrieve
- * @returns {Array} Array of recent request objects
+ * Increment total request count
+ * @returns {Promise<boolean>} Success flag
  */
-export function getRecentRequests(limit = 100) {
-  const stmt = db.prepare(`
-    SELECT timestamp, process_id as processId, action, ip, duration
-    FROM requests
-    ORDER BY timestamp DESC
-    LIMIT ?
-  `)
+export async function incrementTotalRequests() {
+  if (!pool) return false
   
-  return stmt.all(limit)
+  try {
+    await pool.query(`
+      INSERT INTO ur_metrics_server_info(id, start_time, total_requests, last_updated)
+      VALUES(1, $1, 1, NOW())
+      ON CONFLICT (id)
+      DO UPDATE SET
+        total_requests = ur_metrics_server_info.total_requests + 1,
+        last_updated = NOW()
+    `, [new Date()])
+    
+    return true
+  } catch (err) {
+    _logger('Error incrementing total requests: %O', err)
+    return false
+  }
 }
 
 /**
- * Get process counts from the database
- * @returns {Object} Object with process IDs as keys and counts as values
+ * Get recent requests
+ * @param {number} limit Maximum number of requests to return
+ * @returns {Promise<Array>} Recent requests
  */
-export function getProcessCounts() {
-  const rows = db.prepare('SELECT process_id, count FROM process_counts').all()
+export async function getRecentRequests(limit = 100) {
+  if (!pool) return []
   
-  // Convert to object format
-  const processCounts = {}
-  rows.forEach(row => {
-    processCounts[row.process_id] = row.count
-  })
-  
-  return processCounts
+  try {
+    const result = await pool.query(`
+      SELECT 
+        timestamp, 
+        process_id as "processId", 
+        ip, 
+        action, 
+        duration 
+      FROM ur_metrics_requests
+      ORDER BY timestamp DESC
+      LIMIT $1
+    `, [limit])
+    
+    return result.rows
+  } catch (err) {
+    _logger('Error getting recent requests: %O', err)
+    return []
+  }
 }
 
 /**
- * Get action counts from the database
- * @returns {Object} Object with actions as keys and counts as values
+ * Get process counts
+ * @returns {Promise<Object>} Process counts
  */
-export function getActionCounts() {
-  const rows = db.prepare('SELECT action, count FROM action_counts').all()
+export async function getProcessCounts() {
+  if (!pool) return {}
   
-  // Convert to object format
-  const actionCounts = {}
-  rows.forEach(row => {
-    actionCounts[row.action] = row.count
-  })
-  
-  return actionCounts
+  try {
+    const result = await pool.query(`
+      SELECT process_id as key, count as value
+      FROM ur_metrics_process_counts
+      ORDER BY count DESC
+    `)
+    
+    // Convert array of {key, value} to object
+    return result.rows.reduce((acc, row) => {
+      acc[row.key] = row.value
+      return acc
+    }, {})
+  } catch (err) {
+    _logger('Error getting process counts: %O', err)
+    return {}
+  }
 }
 
 /**
- * Get process timing metrics from the database
- * @returns {Object} Object with process IDs as keys and timing stats as values
+ * Get action counts
+ * @returns {Promise<Object>} Action counts
  */
-export function getProcessTiming() {
-  const rows = db.prepare('SELECT process_id, count, total_duration FROM process_counts').all()
+export async function getActionCounts() {
+  if (!pool) return {}
   
-  // Convert to object with timing stats
-  const processTiming = {}
-  rows.forEach(row => {
-    processTiming[row.process_id] = {
-      totalDuration: row.total_duration,
-      count: row.count
+  try {
+    const result = await pool.query(`
+      SELECT action as key, count as value
+      FROM ur_metrics_action_counts
+      ORDER BY count DESC
+    `)
+    
+    // Convert array of {key, value} to object
+    return result.rows.reduce((acc, row) => {
+      acc[row.key] = row.value
+      return acc
+    }, {})
+  } catch (err) {
+    _logger('Error getting action counts: %O', err)
+    return {}
+  }
+}
+
+/**
+ * Get IP counts
+ * @returns {Promise<Object>} IP counts
+ */
+export async function getIpCounts() {
+  if (!pool) return {}
+  
+  try {
+    const result = await pool.query(`
+      SELECT ip as key, count as value
+      FROM ur_metrics_ip_counts
+      ORDER BY count DESC
+    `)
+    
+    // Convert array of {key, value} to object
+    return result.rows.reduce((acc, row) => {
+      acc[row.key] = row.value
+      return acc
+    }, {})
+  } catch (err) {
+    _logger('Error getting IP counts: %O', err)
+    return {}
+  }
+}
+
+/**
+ * Get referrer counts
+ * @returns {Promise<Object>} Referrer counts
+ */
+export async function getReferrerCounts() {
+  if (!pool) return {}
+  
+  try {
+    const result = await pool.query(`
+      SELECT referrer as key, count as value
+      FROM ur_metrics_referrer_counts
+      ORDER BY count DESC
+    `)
+    
+    // Convert array of {key, value} to object
+    return result.rows.reduce((acc, row) => {
+      acc[row.key] = row.value
+      return acc
+    }, {})
+  } catch (err) {
+    _logger('Error getting referrer counts: %O', err)
+    return {}
+  }
+}
+
+/**
+ * Get process timing metrics
+ * @returns {Promise<Object>} Process timing metrics
+ */
+export async function getProcessTiming() {
+  if (!pool) return {}
+  
+  try {
+    const result = await pool.query(`
+      SELECT 
+        process_id as key, 
+        json_build_object(
+          'totalDuration', total_duration,
+          'count', count
+        ) as value
+      FROM ur_metrics_process_counts
+      ORDER BY count DESC
+    `)
+    
+    // Convert array of {key, value} to object
+    return result.rows.reduce((acc, row) => {
+      acc[row.key] = row.value
+      return acc
+    }, {})
+  } catch (err) {
+    _logger('Error getting process timing: %O', err)
+    return {}
+  }
+}
+
+/**
+ * Get action timing metrics
+ * @returns {Promise<Object>} Action timing metrics
+ */
+export async function getActionTiming() {
+  if (!pool) return {}
+  
+  try {
+    const result = await pool.query(`
+      SELECT 
+        action as key, 
+        json_build_object(
+          'totalDuration', total_duration,
+          'count', count
+        ) as value
+      FROM ur_metrics_action_counts
+      ORDER BY count DESC
+    `)
+    
+    // Convert array of {key, value} to object
+    return result.rows.reduce((acc, row) => {
+      acc[row.key] = row.value
+      return acc
+    }, {})
+  } catch (err) {
+    _logger('Error getting action timing: %O', err)
+    return {}
+  }
+}
+
+/**
+ * Get time series data
+ * @param {number} hours Number of hours of data to return
+ * @returns {Promise<Array>} Time series data
+ */
+export async function getTimeSeriesData(hours = 24) {
+  if (!pool) return []
+  
+  try {
+    const result = await pool.query(`
+      SELECT 
+        timestamp, 
+        hour, 
+        total_requests as "totalRequests", 
+        process_counts as "processCounts"
+      FROM ur_metrics_time_series
+      ORDER BY timestamp DESC
+      LIMIT $1
+    `, [hours])
+    
+    return result.rows
+  } catch (err) {
+    _logger('Error getting time series data: %O', err)
+    return []
+  }
+}
+
+/**
+ * Get total requests and server start time
+ * @returns {Promise<Object>} Server info
+ */
+export async function getServerInfo() {
+  if (!pool) return { totalRequests: 0, startTime: new Date().toISOString() }
+  
+  try {
+    const result = await pool.query(`
+      SELECT total_requests as "totalRequests", start_time as "startTime"
+      FROM ur_metrics_server_info
+      WHERE id = 1
+    `)
+    
+    if (result.rows.length === 0) {
+      return { totalRequests: 0, startTime: new Date().toISOString() }
     }
-  })
-  
-  return processTiming
-}
-
-/**
- * Get action timing metrics from the database
- * @returns {Object} Object with actions as keys and timing stats as values
- */
-export function getActionTiming() {
-  const rows = db.prepare('SELECT action, count, total_duration FROM action_counts').all()
-  
-  // Convert to object with timing stats
-  const actionTiming = {}
-  rows.forEach(row => {
-    actionTiming[row.action] = {
-      totalDuration: row.total_duration,
-      count: row.count
-    }
-  })
-  
-  return actionTiming
-}
-
-/**
- * Get IP address counts from the database
- * @returns {Object} Object with IPs as keys and counts as values
- */
-export function getIpCounts() {
-  const rows = db.prepare('SELECT ip, count FROM ip_counts').all()
-  
-  // Convert to object format
-  const ipCounts = {}
-  rows.forEach(row => {
-    ipCounts[row.ip] = row.count
-  })
-  
-  return ipCounts
-}
-
-/**
- * Get referrer counts from the database
- * @returns {Object} Object with referrers as keys and counts as values
- */
-export function getReferrerCounts() {
-  const rows = db.prepare('SELECT referrer, count FROM referrer_counts').all()
-  
-  // Convert to object format
-  const referrerCounts = {}
-  rows.forEach(row => {
-    referrerCounts[row.referrer] = row.count
-  })
-  
-  return referrerCounts
-}
-
-/**
- * Get time series data from the database
- * @param {number} hours Number of hours of data to retrieve
- * @returns {Array} Array of time series bucket objects
- */
-export function getTimeSeriesData(hours = 24) {
-  // Calculate cutoff time
-  const cutoffTime = new Date()
-  cutoffTime.setHours(cutoffTime.getHours() - hours)
-  
-  const stmt = db.prepare(`
-    SELECT bucket_time as timestamp, hour, total_requests, process_counts
-    FROM time_series
-    WHERE bucket_time >= ?
-    ORDER BY bucket_time ASC
-  `)
-  
-  const rows = stmt.all(cutoffTime.toISOString())
-  
-  // Convert process_counts from JSON string to object
-  return rows.map(row => ({
-    timestamp: row.timestamp,
-    hour: row.hour,
-    totalRequests: row.total_requests,
-    processCounts: JSON.parse(row.process_counts || '{}')
-  }))
+    
+    return result.rows[0]
+  } catch (err) {
+    _logger('Error getting server info: %O', err)
+    return { totalRequests: 0, startTime: new Date().toISOString() }
+  }
 }
 
 /**
  * Get request details for a specific process
- * @param {string} processId Process ID to get details for
- * @param {number} limit Maximum number of details to retrieve
- * @returns {Array} Array of detail objects
+ * @param {string} processId Process ID
+ * @returns {Promise<Array>} Request details
  */
-export function getRequestDetails(processId, limit = 20) {
-  const stmt = db.prepare(`
-    SELECT details
-    FROM request_details
-    WHERE process_id = ?
-    ORDER BY timestamp DESC
-    LIMIT ?
-  `)
+export async function getRequestDetails(processId) {
+  if (!pool || !processId) return []
   
-  const rows = stmt.all(processId, limit)
-  
-  // Parse JSON details
-  return rows.map(row => JSON.parse(row.details))
-}
-
-/**
- * Get total request count from the database
- * @returns {number} Total number of requests
- */
-export function getTotalRequests() {
-  const result = db.prepare('SELECT COUNT(*) as count FROM requests').get()
-  return result ? result.count : 0
-}
-
-/**
- * Close the database connection
- * Should be called when the application shuts down
- */
-export function closeDatabase() {
-  if (db) {
-    db.close()
-    _logger('Database connection closed')
+  try {
+    const result = await pool.query(`
+      SELECT details
+      FROM ur_metrics_request_details
+      WHERE process_id = $1
+      ORDER BY timestamp DESC
+      LIMIT 20
+    `, [processId])
+    
+    return result.rows.map(row => row.details)
+  } catch (err) {
+    _logger('Error getting request details: %O', err)
+    return []
   }
 }
 
-// Ensure database is closed on process exit
-process.on('exit', closeDatabase)
-process.on('SIGINT', () => {
-  closeDatabase()
-  process.exit(0)
-})
+/**
+ * Check if database connection is active
+ * @returns {boolean} Connection status
+ */
+export function isConnected() {
+  return pool !== null
+}
+
+/**
+ * Close the database connection pool
+ */
+export async function closeDatabase() {
+  if (pool) {
+    await pool.end()
+    pool = null
+    _logger('Database connection closed')
+  }
+}
