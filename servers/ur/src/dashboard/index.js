@@ -25,9 +25,11 @@ export function generateDashboardHtml(metrics) {
   _logger('Generating dashboard HTML with metrics data');
   
   // Prepare data for process metrics table
-  const allProcessIds = Object.keys(metrics.processCounts);
+  // Add null checks to handle missing data
+  const processCounts = metrics.processCounts || {};
+  const allProcessIds = Object.keys(processCounts);
   const topProcessIds = allProcessIds
-    .sort((a, b) => metrics.processCounts[b] - metrics.processCounts[a])
+    .sort((a, b) => processCounts[b] - processCounts[a])
     .slice(0, 5);
     
   // Add top process IDs to metrics

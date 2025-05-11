@@ -16,9 +16,29 @@ const _logger = logger.child('dashboard');
 export function mountDashboard(app) {
   _logger('Mounting dashboard routes');
   
-  app.get('/dashboard', (req, res) => {
+  app.get('/dashboard', async (req, res) => {
     try {
-      const metrics = getMetrics();
+      // Set timeout to prevent long loading times
+      const timeoutPromise = new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('Dashboard generation timed out')), 15000);
+      });
+      
+      const metricsPromise = Promise.resolve().then(() => {
+        try {
+          return getMetrics() || {}; // Ensure we always have an object
+        } catch (err) {
+          _logger('Error fetching metrics: %o', err);
+          return {}; // Return empty object on error
+        }
+      });
+      
+      // Use Promise.race to implement timeout
+      const metrics = await Promise.race([metricsPromise, timeoutPromise])
+        .catch(err => {
+          _logger('Dashboard error or timeout: %o', err);
+          return {}; // Return empty object on timeout
+        });
+      
       const html = generateDashboardHtml(metrics);
       res.setHeader('Content-Type', 'text/html');
       res.send(html);
