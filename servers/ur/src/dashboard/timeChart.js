@@ -243,6 +243,7 @@ export function getTimeChartScript(rawTimeData) {
     
     // Format date label based on interval
     function formatDateLabel(date, interval) {
+      console.log('Formatting date', date, 'with interval', interval);
       if (interval === 'minute') {
         return date.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
       } else if (interval.includes('min')) {
@@ -257,21 +258,12 @@ export function getTimeChartScript(rawTimeData) {
     
     // Group data by the selected interval
     function groupDataByInterval(data, interval) {
+      console.log('Grouping data with interval:', interval);
       if (data.length === 0) return [];
       
       // Sort data by timestamp (oldest first)
       const sortedData = [...data].sort((a, b) => a.timestamp - b.timestamp);
-      
-      // For simple visualization, just return the data if there aren't many points
-      if (sortedData.length < 24) return sortedData;
-      
-      // Group the data based on interval
-      const result = [];
-      let currentGroup = {
-        timestamp: sortedData[0].timestamp,
-        requests: 0,
-        processCounts: {}
-      };
+      console.log('Sorted data range:', sortedData[0].timestamp, 'to', sortedData[sortedData.length-1].timestamp);
       
       // Determine grouping time increment in milliseconds
       let increment;
@@ -285,33 +277,54 @@ export function getTimeChartScript(rawTimeData) {
         case 'day': increment = 24 * 60 * 60 * 1000; break;
         default: increment = 10 * 60 * 1000; // Default to 10 minutes
       }
+      console.log('Using increment of', increment, 'milliseconds');
       
-      sortedData.forEach(point => {
-        // Check if this point belongs to current group or starts a new one
-        if (point.timestamp - currentGroup.timestamp > increment) {
-          // Add current group to results and start a new one
-          result.push(currentGroup);
-          currentGroup = {
-            timestamp: point.timestamp,
-            requests: 0,
-            processCounts: {}
-          };
-        }
-        
-        // Add point data to current group
-        currentGroup.requests += point.requests;
-        
-        // Merge process counts
-        Object.entries(point.processCounts).forEach(([process, count]) => {
-          if (!currentGroup.processCounts[process]) {
-            currentGroup.processCounts[process] = 0;
-          }
-          currentGroup.processCounts[process] += count;
+      // For very small datasets, we might want to just return the raw data
+      // But for consistency, we'll apply grouping in all cases
+      
+      // Create buckets for each time interval in the range
+      const result = [];
+      
+      // Calculate the start time (floor to nearest interval)
+      const startTime = new Date(sortedData[0].timestamp);
+      const endTime = new Date(sortedData[sortedData.length-1].timestamp);
+      
+      console.log('Data spans from', startTime, 'to', endTime);
+      
+      // Create empty buckets for each interval
+      let currentTime = new Date(startTime);
+      while (currentTime <= endTime) {
+        result.push({
+          timestamp: new Date(currentTime),
+          requests: 0,
+          processCounts: {}
         });
+        currentTime = new Date(currentTime.getTime() + increment);
+      }
+      
+      // Add data points to appropriate buckets
+      sortedData.forEach(point => {
+        // Find which bucket this point belongs to
+        const bucketIndex = result.findIndex(bucket => {
+          return point.timestamp >= bucket.timestamp && 
+                 point.timestamp < new Date(bucket.timestamp.getTime() + increment);
+        });
+        
+        if (bucketIndex >= 0) {
+          // Add point data to bucket
+          result[bucketIndex].requests += point.requests;
+          
+          // Merge process counts
+          Object.entries(point.processCounts).forEach(([process, count]) => {
+            if (!result[bucketIndex].processCounts[process]) {
+              result[bucketIndex].processCounts[process] = 0;
+            }
+            result[bucketIndex].processCounts[process] += count;
+          });
+        }
       });
       
-      // Add the last group
-      result.push(currentGroup);
+      console.log('Created', result.length, 'time buckets');
       
       return result;
     }
@@ -322,7 +335,7 @@ export function getTimeChartScript(rawTimeData) {
       const now = new Date();
       
       console.log('Current time:', now.toLocaleString());
-      console.log('Setting end time to current time');
+      console.log('Current selected interval:', intervalSelector.value);
       
       // Force the end date/time to be now
       endDatePicker.value = formatDateForInput(now);
@@ -332,8 +345,13 @@ export function getTimeChartScript(rawTimeData) {
       const startDate = getStartDateTime();
       const endDate = now; // Use now directly instead of getEndDateTime()
       
-      // Filter and group data
+      console.log('Time range:', startDate.toLocaleString(), 'to', endDate.toLocaleString());
+      
+      // Filter data to the selected time range
       const filteredData = filterDataByTimeRange(startDate, endDate);
+      console.log('Filtered data points:', filteredData.length);
+      
+      // Group data according to the selected interval
       const groupedData = groupDataByInterval(filteredData, intervalSelector.value);
       
       // Sort data chronologically (oldest to newest)
@@ -409,9 +427,20 @@ export function getTimeChartScript(rawTimeData) {
       });
     });
     
+    // Add event listener for interval selection changes
+    intervalSelector.addEventListener('change', function() {
+      console.log('Interval changed to:', this.value);
+      updateTimeChart();
+    });
+    
     // Initialize with default settings on page load
     document.addEventListener('DOMContentLoaded', function() {
       console.log('Dashboard initialized - setting 6h preset as default');
+      
+      // Set interval selector to 10 minutes
+      intervalSelector.value = '10min';
+      console.log('Setting default interval to 10min');
+      
       // Click the 6h preset button to initialize with correct time range
       const sixHourPreset = document.querySelector('.time-preset[data-value="6h"]');
       if (sixHourPreset) {
