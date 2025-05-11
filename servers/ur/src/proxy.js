@@ -248,23 +248,63 @@ export function proxyWith ({ aoUnit, hosts, surUrl, processToHost, ownerToHost }
               return originalEnd.apply(res, arguments)
             }
             
+            // Ensure we record metrics even if the proxy events don't fire
+            const recordTimeoutId = setTimeout(() => {
+              // After 30 seconds, force record metrics if not already done
+              if (!proxyMetricsRecorded) {
+                _logger('Forcing metrics recording after timeout for %s', processId);
+                recordProxyMetrics(res.statusCode || 504); // Gateway timeout
+              }
+            }, 30000);
+            
+            // Record start of proxy operation for logging
+            const proxyStartTime = Date.now();
+            _logger('Starting proxy operation for %s to %s', processId, host);
+            
+            // Add a response listener that will trigger before our callback
+            proxy.once('proxyRes', (proxyRes, req, res) => {
+              clearTimeout(recordTimeoutId);
+              const statusCode = proxyRes.statusCode;
+              _logger('Received proxy response with status %d from %s', statusCode, host);
+              recordProxyMetrics(statusCode);
+            });
+            
+            // Listen for proxy errors at the most specific level
+            proxy.once('error', (err, req, res) => {
+              clearTimeout(recordTimeoutId);
+              _logger('Proxy error event fired for %s: %s', processId, err.message);
+              
+              metricsData.error = err.message || 'Proxy error';
+              metricsData.statusCode = err.statusCode || 502;
+              metricsData.errorCode = err.code;
+              recordProxyMetrics(metricsData.statusCode);
+            });
+            
             proxy.web(req, res, proxyOptions, (err) => {
+              clearTimeout(recordTimeoutId);
+              
               /**
                * No error occurred, so we're done
                */
               if (!err) {
-                // Ensure metrics are recorded in case no write/end was called yet
-                recordProxyMetrics(res.statusCode)
-                return resolve()
+                // Double-check metrics were recorded
+                if (!proxyMetricsRecorded) {
+                  _logger('No metrics recorded yet at proxy callback success, recording now');
+                  recordProxyMetrics(res.statusCode || 200);
+                }
+                return resolve();
               }
               
               /**
-               * Record error metrics
+               * Record error metrics if not already done
                */
-              metricsData.error = err.message || 'Proxy error'
-              metricsData.statusCode = err.statusCode || 502 // Use 502 Bad Gateway as default for proxy errors
-              metricsData.errorCode = err.code
-              recordProxyMetrics(metricsData.statusCode)
+              if (!proxyMetricsRecorded) {
+                metricsData.error = err.message || 'Proxy error';
+                metricsData.statusCode = err.statusCode || 502; // Use 502 Bad Gateway as default for proxy errors
+                metricsData.errorCode = err.code;
+                _logger('Recording error metrics in proxy callback: %s', err.message);
+                recordProxyMetrics(metricsData.statusCode);
+              }
               
               // Log detailed error information
               _logger('Proxy error details for %s:\n  Message: %s\n  Code: %s\n  Host: %s', 
