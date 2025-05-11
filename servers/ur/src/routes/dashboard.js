@@ -282,16 +282,77 @@ function generateDashboardHtml() {
           font-weight: bold;
           width: 120px;
         }
-        .slider-container {
+        .time-controls {
           margin: 20px 0;
+          padding: 15px;
+          background: #f9f9f9;
+          border-radius: 4px;
+          border: 1px solid #eee;
         }
-        #timeRangeSlider {
-          width: 100%;
+        .control-row {
+          display: flex;
+          margin-bottom: 15px;
+          align-items: center;
         }
-        #sliderValue {
-          text-align: center;
+        .control-group {
+          margin-right: 20px;
+          flex: 1;
+        }
+        .control-group label {
+          display: block;
+          margin-bottom: 5px;
           font-weight: bold;
-          margin-top: 5px;
+          font-size: 0.9em;
+          color: #555;
+        }
+        .control-group input, .control-group select {
+          width: 100%;
+          padding: 8px;
+          border: 1px solid #ddd;
+          border-radius: 4px;
+        }
+        .time-range-selector, .interval-selector {
+          margin-bottom: 20px;
+        }
+        .preset-buttons {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 10px;
+        }
+        .time-preset {
+          background: #f2f2f2;
+          border: 1px solid #ddd;
+          padding: 8px 12px;
+          border-radius: 4px;
+          cursor: pointer;
+          font-size: 0.9em;
+        }
+        .time-preset:hover {
+          background: #e0e0e0;
+        }
+        .time-preset.active {
+          background: #0066cc;
+          color: white;
+          border-color: #0055aa;
+        }
+        .apply-btn {
+          background: #0066cc;
+          color: white;
+          border: none;
+          padding: 8px 15px;
+          border-radius: 4px;
+          cursor: pointer;
+          font-weight: bold;
+          margin-left: 10px;
+        }
+        .apply-btn:hover {
+          background: #0055aa;
+        }
+        #intervalSelector {
+          padding: 8px;
+          border: 1px solid #ddd;
+          border-radius: 4px;
+          min-width: 150px;
         }
         .filter-group {
           margin-bottom: 15px;
@@ -343,12 +404,58 @@ function generateDashboardHtml() {
       
       <div class="card">
         <h2>Traffic Overview</h2>
+        <div class="time-controls">
+          <div class="time-range-selector">
+            <h3>Time Range Selection</h3>
+            <div class="control-row">
+              <div class="control-group">
+                <label for="startDatePicker">Start Date:</label>
+                <input type="date" id="startDatePicker">
+              </div>
+              <div class="control-group">
+                <label for="startTimePicker">Start Time:</label>
+                <input type="time" id="startTimePicker" step="60">
+              </div>
+            </div>
+            <div class="control-row">
+              <div class="control-group">
+                <label for="endDatePicker">End Date:</label>
+                <input type="date" id="endDatePicker">
+              </div>
+              <div class="control-group">
+                <label for="endTimePicker">End Time:</label>
+                <input type="time" id="endTimePicker" step="60">
+              </div>
+            </div>
+            <div class="control-row">
+              <div class="preset-buttons">
+                <button class="time-preset" data-value="1h">Last Hour</button>
+                <button class="time-preset" data-value="6h">Last 6 Hours</button>
+                <button class="time-preset" data-value="12h">Last 12 Hours</button>
+                <button class="time-preset" data-value="24h">Last 24 Hours</button>
+                <button class="time-preset" data-value="7d">Last 7 Days</button>
+              </div>
+            </div>
+          </div>
+          
+          <div class="interval-selector">
+            <h3>Interval Selection</h3>
+            <div class="control-row">
+              <select id="intervalSelector">
+                <option value="minute">Minute</option>
+                <option value="5min">5 Minutes</option>
+                <option value="15min">15 Minutes</option>
+                <option value="30min">30 Minutes</option>
+                <option value="hour" selected>Hourly</option>
+                <option value="day">Daily</option>
+              </select>
+              <button id="applyTimeSettings" class="apply-btn">Apply Changes</button>
+            </div>
+          </div>
+        </div>
+        
         <div class="chart-container">
           <canvas id="timeSeriesChart"></canvas>
-        </div>
-        <div class="slider-container">
-          <input type="range" min="1" max="24" value="24" id="timeRangeSlider">
-          <div id="sliderValue">Last 24 hours</div>
         </div>
       </div>
       
@@ -458,45 +565,100 @@ function generateDashboardHtml() {
       </div>
       
       <script>
-        // Initialize time series chart with most recent data on the right (index 0 is oldest, index 23 is newest)
-        // Important: we're keeping the original order of the arrays (oldest first, newest last)
-        const timeLabels = ${JSON.stringify(timeLabels)};
-        const timeSeriesData = ${JSON.stringify(timeSeriesData)};
+        // Store the raw time series data for flexible filtering
+        const rawTimeData = ${JSON.stringify(metrics.timeSeriesData)};
         
+        // Convert the raw data into a more usable format with actual Date objects
+        const timeSeriesDataPoints = rawTimeData.map(bucket => ({
+          timestamp: new Date(bucket.timestamp),
+          requests: bucket.totalRequests,
+          processCounts: bucket.processCounts
+        }));
+        
+        // Initialize time chart
         const timeCtx = document.getElementById('timeSeriesChart').getContext('2d');
-        const timeSeriesChart = new Chart(timeCtx, {
-          type: 'line',
-          data: {
-            labels: timeLabels,
-            datasets: [{
-              label: 'Requests per Hour',
-              data: timeSeriesData,
-              backgroundColor: 'rgba(0, 102, 204, 0.2)',
-              borderColor: 'rgba(0, 102, 204, 1)',
-              borderWidth: 2,
-              tension: 0.1
-            }]
-          },
-          options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            scales: {
-              y: {
-                beginAtZero: true,
-                title: {
-                  display: true,
-                  text: 'Number of Requests'
-                }
-              },
-              x: {
-                title: {
-                  display: true,
-                  text: 'Hour'
+        let timeSeriesChart;
+        
+        // Get current date/time for initializing the pickers
+        const now = new Date();
+        const yesterday = new Date(now);
+        yesterday.setDate(yesterday.getDate() - 1);
+        
+        // Format date for input fields
+        function formatDateForInput(date) {
+          return date.toISOString().split('T')[0];
+        }
+        
+        // Format time for input fields (HH:MM)
+        function formatTimeForInput(date) {
+          return date.toTimeString().substring(0, 5);
+        }
+        
+        // Initialize date/time pickers with a 24-hour range
+        const startDatePicker = document.getElementById('startDatePicker');
+        const startTimePicker = document.getElementById('startTimePicker');
+        const endDatePicker = document.getElementById('endDatePicker');
+        const endTimePicker = document.getElementById('endTimePicker');
+        
+        startDatePicker.value = formatDateForInput(yesterday);
+        startTimePicker.value = formatTimeForInput(yesterday);
+        endDatePicker.value = formatDateForInput(now);
+        endTimePicker.value = formatTimeForInput(now);
+        
+        // Prepare interval dropdown
+        const intervalSelector = document.getElementById('intervalSelector');
+        
+        // Create the initial chart
+        function initializeTimeChart() {
+          // Get date range from pickers
+          const startDate = getStartDateTime();
+          const endDate = getEndDateTime();
+          
+          // Filter data for selected range
+          const filteredData = filterDataByTimeRange(startDate, endDate);
+          
+          // Group data by selected interval
+          const groupedData = groupDataByInterval(filteredData, intervalSelector.value);
+          
+          // Extract labels and values
+          const labels = groupedData.map(point => formatDateLabel(point.timestamp, intervalSelector.value));
+          const values = groupedData.map(point => point.requests);
+          
+          // Create chart
+          timeSeriesChart = new Chart(timeCtx, {
+            type: 'line',
+            data: {
+              labels: labels,
+              datasets: [{
+                label: 'Requests',
+                data: values,
+                backgroundColor: 'rgba(0, 102, 204, 0.2)',
+                borderColor: 'rgba(0, 102, 204, 1)',
+                borderWidth: 2,
+                tension: 0.1
+              }]
+            },
+            options: {
+              responsive: true,
+              maintainAspectRatio: false,
+              scales: {
+                y: {
+                  beginAtZero: true,
+                  title: {
+                    display: true,
+                    text: 'Number of Requests'
+                  }
+                },
+                x: {
+                  title: {
+                    display: true,
+                    text: getIntervalLabel(intervalSelector.value)
+                  }
                 }
               }
             }
-          }
-        });
+          });
+        }
         
         // Process chart
         const processLabels = ${JSON.stringify(topProcessIds.map(id => id.substring(0, 8) + '...'))};        
@@ -643,30 +805,180 @@ function generateDashboardHtml() {
         const slider = document.getElementById('timeRangeSlider');
         const sliderValue = document.getElementById('sliderValue');
         
-        // Initialize with full data range
-        let currentDisplayHours = 24;
+        // Helper functions for time range and interval handling
         
-        // Show proper time range initially - all 24 hours
-        // The full dataset is already in the right order (oldest first, newest last)
-        timeSeriesChart.data.labels = timeLabels;
-        timeSeriesChart.data.datasets[0].data = timeSeriesData;
-        timeSeriesChart.update();
+        // Get start date and time from pickers
+        function getStartDateTime() {
+          const date = new Date(startDatePicker.value + 'T' + startTimePicker.value);
+          return date;
+        }
         
-        slider.addEventListener('input', function() {
-          const hours = parseInt(this.value);
-          currentDisplayHours = hours;
-          sliderValue.innerText = 'Last ' + hours + (hours == 1 ? ' hour' : ' hours');
+        // Get end date and time from pickers
+        function getEndDateTime() {
+          const date = new Date(endDatePicker.value + 'T' + endTimePicker.value);
+          return date;
+        }
+        
+        // Filter data points by time range
+        function filterDataByTimeRange(startTime, endTime) {
+          return timeSeriesDataPoints.filter(point => {
+            return point.timestamp >= startTime && point.timestamp <= endTime;
+          });
+        }
+        
+        // Get a descriptive label for the interval
+        function getIntervalLabel(interval) {
+          const labels = {
+            'minute': 'Minute',
+            '5min': '5 Minutes',
+            '15min': '15 Minutes',
+            '30min': '30 Minutes',
+            'hour': 'Hour',
+            'day': 'Day'
+          };
+          return labels[interval] || 'Time';
+        }
+        
+        // Format date label based on interval
+        function formatDateLabel(date, interval) {
+          if (interval === 'minute') {
+            return date.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+          } else if (interval.includes('min')) {
+            return date.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+          } else if (interval === 'hour') {
+            return date.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+          } else if (interval === 'day') {
+            return date.toLocaleDateString([], {month: 'short', day: 'numeric'});
+          }
+          return date.toLocaleString();
+        }
+        
+        // Group data by the selected interval
+        function groupDataByInterval(data, interval) {
+          if (data.length === 0) return [];
           
-          // When reducing hours, we want to keep the most recent N hours (remove oldest)
-          // Since our data is ordered from oldest (index 0) to newest (index 23), 
-          // we need to take a slice from the end of the array when reducing hours
-          const startIndex = timeLabels.length - hours; // Calculate where to start (to get the last N hours)
+          // Sort data by timestamp
+          const sortedData = [...data].sort((a, b) => a.timestamp - b.timestamp);
           
-          // Take the last 'hours' elements from the arrays (newest data)
-          timeSeriesChart.data.labels = timeLabels.slice(startIndex);
-          timeSeriesChart.data.datasets[0].data = timeSeriesData.slice(startIndex);
-          timeSeriesChart.update();
+          // For simple visualization, just return the data if there aren't many points
+          if (sortedData.length < 24) return sortedData;
+          
+          // Group the data based on interval
+          const result = [];
+          let currentGroup = {
+            timestamp: sortedData[0].timestamp,
+            requests: 0,
+            processCounts: {}
+          };
+          
+          // Determine grouping time increment in milliseconds
+          let increment;
+          switch(interval) {
+            case 'minute': increment = 60 * 1000; break;
+            case '5min': increment = 5 * 60 * 1000; break;
+            case '15min': increment = 15 * 60 * 1000; break;
+            case '30min': increment = 30 * 60 * 1000; break;
+            case 'hour': increment = 60 * 60 * 1000; break;
+            case 'day': increment = 24 * 60 * 60 * 1000; break;
+            default: increment = 60 * 60 * 1000; // Default to hourly
+          }
+          
+          sortedData.forEach(point => {
+            // Check if this point belongs to current group or starts a new one
+            if (point.timestamp - currentGroup.timestamp > increment) {
+              // Add current group to results and start a new one
+              result.push(currentGroup);
+              currentGroup = {
+                timestamp: point.timestamp,
+                requests: 0,
+                processCounts: {}
+              };
+            }
+            
+            // Add point data to current group
+            currentGroup.requests += point.requests;
+            
+            // Merge process counts
+            Object.entries(point.processCounts).forEach(([process, count]) => {
+              if (!currentGroup.processCounts[process]) {
+                currentGroup.processCounts[process] = 0;
+              }
+              currentGroup.processCounts[process] += count;
+            });
+          });
+          
+          // Add the last group
+          result.push(currentGroup);
+          
+          return result;
+        }
+        
+        // Update the chart with new time range and interval
+        function updateTimeChart() {
+          // Get date range
+          const startDate = getStartDateTime();
+          const endDate = getEndDateTime();
+          
+          // Filter and group data
+          const filteredData = filterDataByTimeRange(startDate, endDate);
+          const groupedData = groupDataByInterval(filteredData, intervalSelector.value);
+          
+          // Update chart data
+          const labels = groupedData.map(point => formatDateLabel(point.timestamp, intervalSelector.value));
+          const values = groupedData.map(point => point.requests);
+          
+          // Update chart
+          if (timeSeriesChart) {
+            timeSeriesChart.data.labels = labels;
+            timeSeriesChart.data.datasets[0].data = values;
+            timeSeriesChart.options.scales.x.title.text = getIntervalLabel(intervalSelector.value);
+            timeSeriesChart.update();
+          }
+        }
+        
+        // Set up event listeners for time range controls
+        document.getElementById('applyTimeSettings').addEventListener('click', function() {
+          updateTimeChart();
         });
+        
+        // Handle preset time range buttons
+        document.querySelectorAll('.time-preset').forEach(button => {
+          button.addEventListener('click', function() {
+            // Remove active class from all presets
+            document.querySelectorAll('.time-preset').forEach(btn => btn.classList.remove('active'));
+            // Add active class to clicked button
+            this.classList.add('active');
+            
+            const value = this.dataset.value;
+            const now = new Date();
+            let startDate = new Date(now);
+            
+            // Set the time range based on preset value
+            if (value === '1h') {
+              startDate.setHours(now.getHours() - 1);
+            } else if (value === '6h') {
+              startDate.setHours(now.getHours() - 6);
+            } else if (value === '12h') {
+              startDate.setHours(now.getHours() - 12);
+            } else if (value === '24h') {
+              startDate.setDate(now.getDate() - 1);
+            } else if (value === '7d') {
+              startDate.setDate(now.getDate() - 7);
+            }
+            
+            // Update date/time pickers
+            startDatePicker.value = formatDateForInput(startDate);
+            startTimePicker.value = formatTimeForInput(startDate);
+            endDatePicker.value = formatDateForInput(now);
+            endTimePicker.value = formatTimeForInput(now);
+            
+            // Update chart
+            updateTimeChart();
+          });
+        });
+        
+        // Initialize the chart
+        initializeTimeChart();
         
         // Auto-refresh functionality
         let refreshInterval;
