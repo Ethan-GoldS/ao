@@ -269,11 +269,6 @@ export function getTrafficChartScript(rawTimeData) {
     });
   `;
 }
-    </div>
-    
-    <div class="chart-container">
-      <canvas id="timeSeriesChart"></canvas>
-    </div>
   `;
 }
 
