@@ -283,8 +283,29 @@ export async function getTimeSeriesData(hours = 24) {
     }
   } catch (error) {
     _logger('Error getting time series data: %O', error)
-    // Provide fallback data
-    return generateFallbackTimeSeriesData(hours)
+    // Generate empty time series data
+    const timeLabels = []
+    const timeSeriesData = []
+    const now = new Date()
+    
+    for (let i = hours - 1; i >= 0; i--) {
+      const date = new Date(now.getTime() - i * 60 * 60 * 1000)
+      timeLabels.push(date.getUTCHours().toString().padStart(2, '0') + ':00')
+      
+      const bucketTime = new Date(now.getTime() - i * 60 * 60 * 1000)
+      timeSeriesData.push({
+        timestamp: bucketTime.toISOString(),
+        hour: bucketTime.getUTCHours(),
+        totalRequests: 0,
+        processCounts: {}
+      })
+    }
+    
+    return {
+      timeSeriesData,
+      timeLabels,
+      topProcessIds: []
+    }
   }
 }
 
@@ -352,7 +373,30 @@ async function processTimeSeriesResults(result, hours) {
     return { timeSeriesData, timeLabels, topProcessIds }
   } catch (error) {
     _logger('Error processing time series results: %O', error)
-    return generateFallbackTimeSeriesData(hours)
+    
+    // Generate empty time series data on error
+    const timeLabels = []
+    const timeSeriesData = []
+    const now = new Date()
+    
+    for (let i = hours - 1; i >= 0; i--) {
+      const date = new Date(now.getTime() - i * 60 * 60 * 1000)
+      timeLabels.push(date.getUTCHours().toString().padStart(2, '0') + ':00')
+      
+      const bucketTime = new Date(now.getTime() - i * 60 * 60 * 1000)
+      timeSeriesData.push({
+        timestamp: bucketTime.toISOString(),
+        hour: bucketTime.getUTCHours(),
+        totalRequests: 0,
+        processCounts: {}
+      })
+    }
+    
+    return {
+      timeSeriesData,
+      timeLabels,
+      topProcessIds: []
+    }
   }
 }
 
