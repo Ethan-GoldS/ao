@@ -600,16 +600,30 @@ function generateDashboardHtml() {
         const endDatePicker = document.getElementById('endDatePicker');
         const endTimePicker = document.getElementById('endTimePicker');
         
-        startDatePicker.value = formatDateForInput(yesterday);
-        startTimePicker.value = formatTimeForInput(yesterday);
+        // Set default to past 6 hours
+        const sixHoursAgo = new Date(now);
+        sixHoursAgo.setHours(now.getHours() - 6);
+        
+        startDatePicker.value = formatDateForInput(sixHoursAgo);
+        startTimePicker.value = formatTimeForInput(sixHoursAgo);
         endDatePicker.value = formatDateForInput(now);
         endTimePicker.value = formatTimeForInput(now);
         
-        // Prepare interval dropdown
+        // Prepare interval dropdown - set default to 10 minutes
         const intervalSelector = document.getElementById('intervalSelector');
+        // Add 10-minute option and select it by default
+        const tenMinOption = document.createElement('option');
+        tenMinOption.value = '10min';
+        tenMinOption.text = '10 Minutes';
+        // Insert after 5min option (index 1)
+        intervalSelector.add(tenMinOption, 2);
+        intervalSelector.value = '10min';
         
         // Create the initial chart
         function initializeTimeChart() {
+          // Activate the 6h preset button by default
+          document.querySelector('.time-preset[data-value="6h"]').classList.add('active');
+          
           // Get date range from pickers
           const startDate = getStartDateTime();
           const endDate = getEndDateTime();
@@ -621,6 +635,7 @@ function generateDashboardHtml() {
           const groupedData = groupDataByInterval(filteredData, intervalSelector.value);
           
           // Extract labels and values
+          // Ensure data is in chronological order (oldest first, newest last)
           const labels = groupedData.map(point => formatDateLabel(point.timestamp, intervalSelector.value));
           const values = groupedData.map(point => point.requests);
           
@@ -831,6 +846,7 @@ function generateDashboardHtml() {
           const labels = {
             'minute': 'Minute',
             '5min': '5 Minutes',
+            '10min': '10 Minutes',
             '15min': '15 Minutes',
             '30min': '30 Minutes',
             'hour': 'Hour',
@@ -876,11 +892,12 @@ function generateDashboardHtml() {
           switch(interval) {
             case 'minute': increment = 60 * 1000; break;
             case '5min': increment = 5 * 60 * 1000; break;
+            case '10min': increment = 10 * 60 * 1000; break;
             case '15min': increment = 15 * 60 * 1000; break;
             case '30min': increment = 30 * 60 * 1000; break;
             case 'hour': increment = 60 * 60 * 1000; break;
             case 'day': increment = 24 * 60 * 60 * 1000; break;
-            default: increment = 60 * 60 * 1000; // Default to hourly
+            default: increment = 10 * 60 * 1000; // Default to 10 minutes
           }
           
           sortedData.forEach(point => {
@@ -953,17 +970,22 @@ function generateDashboardHtml() {
             const now = new Date();
             let startDate = new Date(now);
             
-            // Set the time range based on preset value
+            // Correctly set the time range based on preset value (going back from now)
             if (value === '1h') {
-              startDate.setHours(now.getHours() - 1);
+              // Go back 1 hour from current time
+              startDate = new Date(now.getTime() - (1 * 60 * 60 * 1000));
             } else if (value === '6h') {
-              startDate.setHours(now.getHours() - 6);
+              // Go back 6 hours from current time
+              startDate = new Date(now.getTime() - (6 * 60 * 60 * 1000));
             } else if (value === '12h') {
-              startDate.setHours(now.getHours() - 12);
+              // Go back 12 hours from current time
+              startDate = new Date(now.getTime() - (12 * 60 * 60 * 1000));
             } else if (value === '24h') {
-              startDate.setDate(now.getDate() - 1);
+              // Go back 24 hours from current time
+              startDate = new Date(now.getTime() - (24 * 60 * 60 * 1000));
             } else if (value === '7d') {
-              startDate.setDate(now.getDate() - 7);
+              // Go back 7 days from current time
+              startDate = new Date(now.getTime() - (7 * 24 * 60 * 60 * 1000));
             }
             
             // Update date/time pickers
