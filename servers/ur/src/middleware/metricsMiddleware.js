@@ -2,10 +2,31 @@
  * Metrics middleware
  * Collects metrics for all requests without affecting the proxy functionality
  */
-import { startTracking, finishTracking, extractAction } from '../metrics.js'
+import { startTracking, finishTracking, extractAction, recordRequestDetails } from '../metrics.js'
 import { logger } from '../logger.js'
 
 const _logger = logger.child('metrics-middleware')
+
+/**
+ * Get the real client IP address from request
+ */
+function getClientIp(req) {
+  // Check for proxy headers first
+  const xForwardedFor = req.headers['x-forwarded-for'];
+  if (xForwardedFor) {
+    // Get the first IP in the list which is the client's IP
+    const ips = xForwardedFor.split(',').map(ip => ip.trim());
+    return ips[0];
+  }
+  
+  // Get from req.ip but remove IPv6 prefix if present
+  if (req.ip) {
+    return req.ip.replace(/^::ffff:/, '');
+  }
+  
+  // Fallback to remote address
+  return req.connection?.remoteAddress?.replace(/^::ffff:/, '') || 'unknown';
+}
 
 /**
  * Create middleware to collect metrics for all requests
@@ -17,37 +38,79 @@ export function metricsMiddleware() {
       return next()
     }
 
-    // Start tracking request
-    const tracking = startTracking(req)
+    // Get process ID from query params
+    const processId = req.query['process-id'] || null;
     
-    // DO NOT try to access or parse req.body here as it will break proxy functionality
+    // Get proper client IP
+    const clientIp = getClientIp(req);
+    
+    // Record basic request details immediately (without parsing body)
+    const requestDetails = {
+      timestamp: new Date().toISOString(),
+      method: req.method,
+      path: req.path,
+      processId,
+      ip: clientIp,
+      referer: req.headers.referer || req.headers.referrer || 'unknown',
+      userAgent: req.headers['user-agent'] || 'unknown',
+      origin: req.headers.origin || 'unknown',
+      contentType: req.headers['content-type'] || 'unknown'
+    };
+    
+    // Store request details for dashboard
+    recordRequestDetails(requestDetails);
+    
+    // Start tracking request for performance metrics
+    const tracking = {
+      startTime: Date.now(),
+      processId,
+      ip: clientIp
+    };
     
     // Capture original end method to intercept when response is sent
-    const originalEnd = res.end
+    const originalEnd = res.end;
     
     // Override end method to collect metrics before completing the response
     res.end = function(...args) {
       try {
-        // Get processId from query parameter
-        const processId = req.query['process-id'] || null
-        // We can't extract action directly since we can't parse the body
-        // Just record the metrics with the information we have
+        // Measure request duration
+        const duration = Date.now() - tracking.startTime;
+        
+        // Get raw action from response data if possible (advanced attempt)
+        let action = null;
+        try {
+          // Try to get action from response, if it contains a successfully processed request
+          if (args[0] && typeof args[0] === 'string' && args[0].includes('"Action"')) {
+            const responseData = JSON.parse(args[0]);
+            if (responseData.Tags) {
+              const actionTag = responseData.Tags.find(tag => 
+                tag.name === 'Action' || tag.name === 'action'
+              );
+              if (actionTag) action = actionTag.value;
+            }
+          }
+        } catch (e) {
+          // Silent catch - don't affect proxy
+        }
+        
+        // Update metrics with duration
         finishTracking({
           ...tracking,
-          processId: processId // Ensure processId is correctly passed
-        }, null) // We can't safely extract action
+          processId, // Ensure processId is correctly passed
+          duration
+        }, action);
       } catch (err) {
         // Never let metrics collection affect the actual response
-        _logger('Error in metrics collection: %O', err)
+        _logger('Error in metrics collection: %O', err);
       }
       
       // Call the original end method to complete the response
-      return originalEnd.apply(this, args)
-    }
+      return originalEnd.apply(this, args);
+    };
     
-    // DO NOT attempt to read the request body in any way
+    // DO NOT attempt to read the request body directly
     // as it will break the proxy functionality
     
-    next()
-  }
+    next();
+  };
 }
