@@ -18,9 +18,28 @@ const middlewareWithByStrategy = {
 
 const middlewareWith = middlewareWithByStrategy[config.strategy]
 
+// Create raw body buffer parser
+const rawBodyParser = (req, res, next) => {
+  if (req.headers['content-type'] === 'application/json') {
+    let data = '';
+    req.on('data', chunk => {
+      data += chunk.toString();
+    });
+    req.on('end', () => {
+      req.rawBody = data;
+      next();
+    });
+  } else {
+    next();
+  }
+};
+
 pipe(
   (app) => app.use(cors()),
   (app) => {
+    // Capture raw body for JSON requests
+    app.use(rawBodyParser);
+    
     // Add metrics middleware (doesn't affect core functionality)
     // DO NOT parse body here - it breaks proxy functionality
     app.use(metricsMiddleware())

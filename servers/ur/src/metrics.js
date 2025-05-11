@@ -130,13 +130,35 @@ export function startTracking(req) {
     (req.path.match(/process-id=([^&]+)/) || [])[1] || 
     null;
   
-  // Parse request body if present
+  // Parse request body if present and capture raw body as well
   let requestBody = req.body || null;
-  if (requestBody && typeof requestBody === 'string' && requestBody.trim().startsWith('{')) {
+  let rawBody = null;
+  
+  // Capture the raw request body for debugging
+  if (req.rawBody) {
+    rawBody = req.rawBody.toString();
+  }
+  
+  // Handle string body (common with fetch API)
+  if (requestBody && typeof requestBody === 'string') {
     try {
-      requestBody = JSON.parse(requestBody);
+      // Try to parse as JSON if it looks like JSON
+      if (requestBody.trim().startsWith('{') || requestBody.trim().startsWith('[')) {
+        requestBody = JSON.parse(requestBody);
+        _logger('Successfully parsed request body as JSON');
+      }
     } catch (e) {
-      // Keep as string if parsing fails
+      _logger('Error parsing request body: %O', e);
+      // If we have a raw body, try parsing that instead
+      if (rawBody) {
+        try {
+          requestBody = JSON.parse(rawBody);
+          _logger('Successfully parsed raw body as JSON');
+        } catch (innerErr) {
+          _logger('Error parsing raw body: %O', innerErr);
+          // Keep as string if all parsing fails
+        }
+      }
     }
   }
   
