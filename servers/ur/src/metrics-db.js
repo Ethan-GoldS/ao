@@ -18,6 +18,59 @@ const DB_FILE = path.join(STORAGE_PATH, 'metrics.db')
 // Database connection instance
 let db = null
 
+// Transaction queue to ensure only one transaction at a time
+const transactionQueue = []
+let isProcessingQueue = false
+
+/**
+ * Execute a database operation with transaction support in a serialized manner
+ * @param {Function} operation Function that performs the database operation
+ * @returns {Promise<any>} Result of the operation
+ */
+async function executeSerializedTransaction(operation) {
+  return new Promise((resolve, reject) => {
+    // Add this operation to the queue
+    transactionQueue.push({ operation, resolve, reject })
+    
+    // Start processing the queue if it's not already being processed
+    if (!isProcessingQueue) {
+      processTransactionQueue()
+    }
+  })
+}
+
+/**
+ * Process the transaction queue one operation at a time
+ */
+async function processTransactionQueue() {
+  if (isProcessingQueue || transactionQueue.length === 0) {
+    return
+  }
+  
+  isProcessingQueue = true
+  
+  try {
+    // Get the next operation from the queue
+    const { operation, resolve, reject } = transactionQueue.shift()
+    
+    // Execute the operation
+    try {
+      const result = await operation()
+      resolve(result)
+    } catch (err) {
+      reject(err)
+    }
+    
+    // Continue processing the queue
+    isProcessingQueue = false
+    processTransactionQueue()
+  } catch (err) {
+    _logger('Error processing transaction queue: %O', err)
+    isProcessingQueue = false
+    processTransactionQueue()
+  }
+}
+
 /**
  * Initialize the metrics database
  * Creates necessary tables and indexes
@@ -152,27 +205,27 @@ export async function recordRequest(requestData) {
     return null
   }
   
-  const { 
-    timestamp, 
-    processId, 
-    ip = 'unknown', 
-    action = null, 
-    duration = 0,
-    details = {} 
-  } = requestData
-  
-  try {
-    // Use a mutex-style approach for transaction safety
-    let transactionStarted = false;
-    let requestId = null;
+  // Use serialized transaction system to prevent concurrent transaction issues
+  return executeSerializedTransaction(async () => {
+    const { 
+      timestamp, 
+      processId, 
+      ip = 'unknown', 
+      action = null, 
+      duration = 0,
+      details = {} 
+    } = requestData
+    
+    let transactionStarted = false
+    let requestId = null
     
     try {
       // Begin transaction for data consistency
-      await db.exec('BEGIN IMMEDIATE TRANSACTION');
-      transactionStarted = true;
+      await db.exec('BEGIN TRANSACTION')
+      transactionStarted = true
       
       // Convert timestamp to Unix timestamp for easier querying
-      const unixTimestamp = new Date(timestamp).getTime();
+      const unixTimestamp = new Date(timestamp).getTime()
       
       // Insert request record
       const result = await db.run(
@@ -181,9 +234,9 @@ export async function recordRequest(requestData) {
          VALUES 
           (?, ?, ?, ?, ?, ?)`,
         [timestamp, processId, ip, action, duration, unixTimestamp]
-      );
+      )
       
-      requestId = result.lastID;
+      requestId = result.lastID
       
       // Update processes table
       if (processId) {
@@ -194,7 +247,7 @@ export async function recordRequest(requestData) {
             last_seen = ?,
             total_requests = total_requests + 1,
             avg_duration = ((avg_duration * total_requests) + ?) / (total_requests + 1)
-        `, [processId, timestamp, timestamp, duration, timestamp, duration]);
+        `, [processId, timestamp, timestamp, duration, timestamp, duration])
       }
       
       // Update IP addresses table
@@ -205,7 +258,7 @@ export async function recordRequest(requestData) {
           ON CONFLICT (ip) DO UPDATE SET
             last_seen = ?,
             total_requests = total_requests + 1
-        `, [ip, timestamp, timestamp, timestamp]);
+        `, [ip, timestamp, timestamp, timestamp])
       }
       
       // Update actions table
@@ -217,54 +270,61 @@ export async function recordRequest(requestData) {
             last_seen = ?,
             total_requests = total_requests + 1,
             avg_duration = ((avg_duration * total_requests) + ?) / (total_requests + 1)
-        `, [action, timestamp, timestamp, duration, timestamp, duration]);
+        `, [action, timestamp, timestamp, duration, timestamp, duration])
       }
       
       // Insert any additional details
       if (details && Object.keys(details).length > 0) {
         const stmt = await db.prepare(`
           INSERT INTO request_details (request_id, key, value) VALUES (?, ?, ?)
-        `);
+        `)
         
         for (const [key, value] of Object.entries(details)) {
           // Skip undefined or null values
-          if (value === undefined || value === null) continue;
+          if (value === undefined || value === null) continue
           
           // Convert objects to JSON strings and ensure other values are converted to strings
-          const valueString = typeof value === 'object' 
-            ? JSON.stringify(value).substring(0, 1000) // Limit object size
-            : String(value).substring(0, 1000); // Limit string size
+          let valueString
+          try {
+            valueString = typeof value === 'object' 
+              ? JSON.stringify(value).substring(0, 1000) // Limit object size
+              : String(value).substring(0, 1000) // Limit string size
+          } catch (jsonErr) {
+            // If JSON stringify fails, use a simple string representation
+            valueString = `[Unstringifiable Object: ${Object.prototype.toString.call(value)}]`
+          }
           
-          await stmt.run(requestId, key, valueString);
+          await stmt.run(requestId, key, valueString)
         }
         
-        await stmt.finalize();
+        await stmt.finalize()
       }
       
       // Commit the transaction
-      await db.exec('COMMIT');
-      transactionStarted = false;
+      await db.exec('COMMIT')
+      transactionStarted = false
       
-      _logger('Recorded request metrics for %s', processId || 'unknown process');
-      return requestId;
-    } catch (innerErr) {
+      _logger('Recorded request metrics for %s', processId || 'unknown process')
+      return requestId
+    } catch (err) {
       // Only try to rollback if we successfully started a transaction
       if (transactionStarted) {
         try {
-          await db.exec('ROLLBACK');
+          await db.exec('ROLLBACK')
         } catch (rollbackErr) {
           // Ignore rollback errors, but log them
-          _logger('Error during transaction rollback: %O', rollbackErr);
+          _logger('Error during transaction rollback: %O', rollbackErr)
         }
       }
       
-      // Re-throw the original error
-      throw innerErr;
+      _logger('Error recording request metrics: %O', err)
+      return null
     }
-  } catch (err) {
-    _logger('Error recording request metrics: %O', err);
-    return null;
-  }
+  }).catch(err => {
+    // This will catch any errors from the serialized transaction system itself
+    _logger('Error in serialized transaction system: %O', err)
+    return null
+  })
 }
 
 /**
