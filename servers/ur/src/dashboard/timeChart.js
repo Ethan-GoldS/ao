@@ -8,6 +8,51 @@
  */
 
 /**
+ * Initialize time control HTML elements and event listeners
+ * @returns {String} HTML for the time controls
+ */
+export function initializeTimeControls() {
+  // Time range presets
+  const presetRanges = ['1h', '3h', '6h', '12h', '24h', '3d'];
+  const defaultRange = '6h';
+  
+  // Time interval options
+  const intervalOptions = ['1min', '5min', '30min', '1h'];
+  const defaultInterval = '5min';
+  
+  // Generate preset buttons HTML
+  const presetButtonsHtml = presetRanges.map(range => {
+    return `<button class="time-preset-btn${range === defaultRange ? ' active' : ''}" data-range="${range}">${range}</button>`;
+  }).join('');
+  
+  // Generate interval selector options HTML
+  const intervalOptionsHtml = intervalOptions.map(interval => {
+    return `<option value="${interval}"${interval === defaultInterval ? ' selected' : ''}>${interval}</option>`;
+  }).join('');
+  
+  // Time controls HTML
+  return `
+    <div class="time-controls">
+      <div class="time-range-section">
+        <label>Time Range:</label>
+        <div class="time-preset-buttons">
+          ${presetButtonsHtml}
+        </div>
+      </div>
+      
+      <div class="time-interval-section">
+        <label for="time-interval-selector">Interval:</label>
+        <select id="time-interval-selector">
+          ${intervalOptionsHtml}
+        </select>
+      </div>
+      
+      <button id="apply-time-settings" class="apply-btn">Apply</button>
+    </div>
+  `;
+}
+
+/**
  * Generate the traffic overview component HTML
  * @param {Object} timeSeriesData - Time series data from metrics service
  * @returns {String} HTML for the traffic overview component
