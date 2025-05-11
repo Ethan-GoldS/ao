@@ -101,7 +101,22 @@ export function getTimeChartScript(rawTimeData) {
     console.log(allTimestamps);
     
     // Convert the raw data into a more usable format with actual Date objects
-    const timeSeriesDataPoints = rawTimeData.map(bucket => {
+    // But first, filter out any data from May 9th which is incorrect
+    const filteredRawData = rawTimeData.filter(bucket => {
+      if (!bucket.timestamp) return false;
+      
+      const date = new Date(bucket.timestamp);
+      // Filter out any data from May 9th or May 10th
+      const isMay9or10 = (date.getMonth() === 4 && (date.getDate() === 9 || date.getDate() === 10));
+      
+      // Only include today's data (May 11th 2025) or future data
+      return !isMay9or10;
+    });
+    
+    console.log('Filtered out old data. Original:', rawTimeData.length, 'items, Remaining:', filteredRawData.length, 'items');
+    
+    // Now convert the filtered data to usable format
+    const timeSeriesDataPoints = filteredRawData.map(bucket => {
       // Check for invalid timestamps
       if (!bucket.timestamp) {
         console.error('Found bucket with no timestamp:', bucket);
@@ -114,6 +129,19 @@ export function getTimeChartScript(rawTimeData) {
       
       // Create a new Date object and log it for debugging
       const dateObj = new Date(bucket.timestamp);
+      
+      // Double-check the date is not May 9th or 10th
+      const isMay9or10 = (dateObj.getMonth() === 4 && (dateObj.getDate() === 9 || dateObj.getDate() === 10));
+      if (isMay9or10) {
+        console.warn('Found May 9/10 data that should have been filtered:', dateObj.toLocaleString());
+        // Skip this data point
+        return {
+          timestamp: new Date(), // Use current time instead
+          requests: 0, // Zero out the data
+          processCounts: {}
+        };
+      }
+      
       return {
         timestamp: dateObj,
         requests: bucket.totalRequests,

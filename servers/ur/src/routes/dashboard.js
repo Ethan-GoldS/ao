@@ -18,7 +18,22 @@ export function mountDashboard(app) {
   
   app.get('/dashboard', (req, res) => {
     try {
+      // Add cache control headers to prevent caching of the dashboard
+      res.set({
+        'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+        'Pragma': 'no-cache',
+        'Expires': '0',
+        'Surrogate-Control': 'no-store'
+      });
+      
+      // Get metrics data
       const metrics = getMetrics();
+      
+      // Render dashboard with timestamp to force refresh
+      const timestamp = new Date().toISOString();
+      metrics.generatedAt = timestamp;
+      
+      // Render dashboard
       const html = generateDashboardHtml(metrics);
       res.setHeader('Content-Type', 'text/html');
       res.send(html);
