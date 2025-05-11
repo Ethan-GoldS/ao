@@ -62,53 +62,23 @@ const metrics = {
 // Maximum number of recent requests to keep
 const MAX_RECENT_REQUESTS = 100
 
-// Store a time series of request counts with more granular 10-minute buckets
-const TIME_SERIES_BUCKETS = 144; // 24 hours worth of 10-minute buckets
-const TIME_BUCKET_SIZE_MS = 10 * 60 * 1000; // 10 minutes
+// Store a time series of request counts (last 24 hours with hourly buckets)
+const TIME_SERIES_BUCKETS = 24
+const TIME_BUCKET_SIZE_MS = 60 * 60 * 1000 // 1 hour
 
-// Initialize time series buckets - only called when no data exists
+// Initialize time series buckets
 function initTimeSeriesBuckets() {
-  // Only initialize if we don't already have data
-  if (metrics.timeSeriesData && metrics.timeSeriesData.length > 0) {
-    _logger('Time series data already exists, not re-initializing');
-    return;
-  }
-
-  const now = new Date();
-  metrics.timeSeriesData = [];
+  const now = Date.now()
+  metrics.timeSeriesData = []
   
-  // Start with current time, rounded to the nearest 10-minute boundary
-  const currentTime = new Date(now);
-  // Round to nearest 10-minute boundary
-  const minutes = Math.floor(currentTime.getMinutes() / 10) * 10;
-  currentTime.setMinutes(minutes, 0, 0);
-  
-  _logger('Initializing time series buckets starting from %s', currentTime.toISOString());
-  
-  // Create 10-minute buckets going back in time
-  for (let i = 0; i < TIME_SERIES_BUCKETS; i++) {
-    const bucketTime = new Date(currentTime);
-    // Go back by i*10 minutes
-    bucketTime.setMinutes(currentTime.getMinutes() - (i * 10));
-    
-    // Add bucket (most recent first in array)
-    metrics.timeSeriesData.unshift({
+  for (let i = TIME_SERIES_BUCKETS - 1; i >= 0; i--) {
+    const bucketTime = new Date(now - (i * TIME_BUCKET_SIZE_MS))
+    metrics.timeSeriesData.push({
       timestamp: bucketTime.toISOString(),
       hour: bucketTime.getHours(),
-      minute: bucketTime.getMinutes(),
       totalRequests: 0,
       processCounts: {}
-    });
-  }
-  
-  // Log the time range covered by our buckets
-  if (metrics.timeSeriesData.length > 0) {
-    const firstBucket = new Date(metrics.timeSeriesData[0].timestamp);
-    const lastBucket = new Date(metrics.timeSeriesData[metrics.timeSeriesData.length - 1].timestamp);
-    _logger('Created %d time buckets covering %s to %s', 
-            metrics.timeSeriesData.length,
-            firstBucket.toISOString(),
-            lastBucket.toISOString());
+    })
   }
 }
 
@@ -164,63 +134,30 @@ export function recordRequestDetails(details) {
  */
 function updateTimeSeriesData(processId, timestamp) {
   try {
-    // Debug incoming timestamp
-    _logger('Processing timestamp for metrics: %s (processId: %s)', timestamp, processId);
-    
-    // Ensure we have a valid timestamp
-    if (!timestamp) {
-      _logger('WARNING: Missing timestamp for request from process %s, using current time', processId);
-      timestamp = new Date().toISOString();
-    }
-    
     const requestTime = new Date(timestamp);
     const now = new Date();
     
-    // Debug timestamps after parsing
-    _logger('Request time parsed: %s', requestTime.toISOString());
-    
-    // Find the appropriate time bucket for this request's actual timestamp
-    // Round to the nearest 10-minute boundary for consistent bucket selection
-    const bucketTime = new Date(requestTime);
-    const minutes = Math.floor(bucketTime.getMinutes() / 10) * 10;
-    bucketTime.setMinutes(minutes, 0, 0);
-    
-    _logger('Looking for bucket near time: %s', bucketTime.toISOString());
-    
-    // Find the matching bucket or the closest one
-    let targetBucket = null;
-    let closestDiff = Infinity;
-    
-    for (const bucket of metrics.timeSeriesData) {
-      const bucketDate = new Date(bucket.timestamp);
-      const diff = Math.abs(bucketDate - bucketTime);
-      
-      if (diff < closestDiff) {
-        closestDiff = diff;
-        targetBucket = bucket;
-      }
-    }
-    
-    if (!targetBucket) {
-      _logger('No suitable bucket found for timestamp %s', timestamp);
+    // Find the right time bucket for this request
+    const timeDiff = now - requestTime;
+    if (timeDiff > TIME_SERIES_BUCKETS * TIME_BUCKET_SIZE_MS) {
+      // Request is older than our tracking window
       return;
     }
     
-    // Log both timestamps to debug the bucket selection
-    _logger('Found bucket at %s for request at %s (diff: %d ms)', 
-           targetBucket.timestamp, bucketTime.toISOString(), closestDiff);
+    const bucketIndex = Math.floor(timeDiff / TIME_BUCKET_SIZE_MS);
+    if (bucketIndex < 0 || bucketIndex >= metrics.timeSeriesData.length) {
+      return;
+    }
     
     // Update bucket counts
-    targetBucket.totalRequests += 1;
+    const bucket = metrics.timeSeriesData[bucketIndex];
+    bucket.totalRequests += 1;
     
     // Update process count in bucket
-    if (!targetBucket.processCounts[processId]) {
-      targetBucket.processCounts[processId] = 0;
+    if (!bucket.processCounts[processId]) {
+      bucket.processCounts[processId] = 0;
     }
-    targetBucket.processCounts[processId] += 1;
-    
-    _logger('Updated metrics bucket at %s with request from %s', 
-            targetBucket.timestamp, processId);
+    bucket.processCounts[processId] += 1;
     
   } catch (err) {
     _logger('Error updating time series data: %O', err);
@@ -323,49 +260,24 @@ export function finishTracking(tracking, action) {
  * Refresh time series data by adding a new bucket and removing oldest
  */
 function refreshTimeSeriesData() {
-  const now = new Date();
-  
-  // Create a new bucket at the current 10-minute boundary
+  const now = Date.now();
   const newBucketTime = new Date(now);
-  // Round to nearest 10-minute boundary
-  const minutes = Math.floor(newBucketTime.getMinutes() / 10) * 10;
-  newBucketTime.setMinutes(minutes, 0, 0);
   
-  _logger('Refreshing time buckets at %s', now.toISOString());
-  
-  // Check if we already have a bucket for this 10-minute time slot
-  const mostRecentBucket = metrics.timeSeriesData[metrics.timeSeriesData.length - 1];
-  if (mostRecentBucket) {
-    const mostRecentTime = new Date(mostRecentBucket.timestamp);
-    const timeDiff = (newBucketTime - mostRecentTime) / (60 * 1000); // diff in minutes
-    
-    // If we already have a bucket for the current 10-minute period, nothing to do
-    if (timeDiff < 10) {
-      _logger('Most recent bucket is still current (%s), not refreshing yet', 
-              mostRecentBucket.timestamp);
-      return;
-    }
-  }
-  
-  // Remove oldest bucket if we've reached the limit
+  // Remove oldest bucket
   if (metrics.timeSeriesData.length >= TIME_SERIES_BUCKETS) {
-    const oldestBucket = metrics.timeSeriesData.shift();
-    _logger('Removed oldest bucket from %s', oldestBucket.timestamp);
+    metrics.timeSeriesData.shift();
   }
   
   // Add new bucket
   metrics.timeSeriesData.push({
     timestamp: newBucketTime.toISOString(),
     hour: newBucketTime.getHours(),
-    minute: newBucketTime.getMinutes(),
     totalRequests: 0,
     processCounts: {}
   });
-  
-  _logger('Added new bucket for %s', newBucketTime.toISOString());
 }
 
-// Refresh time series data every 10 minutes
+// Refresh time series data every hour
 setInterval(refreshTimeSeriesData, TIME_BUCKET_SIZE_MS);
 
 // Save metrics to disk periodically if storage is enabled
@@ -396,7 +308,7 @@ function saveMetricsToDisk() {
     const metricsFilePath = path.join(STORAGE_PATH, 'metrics.json');
     const metricsBackupPath = path.join(STORAGE_PATH, `metrics-backup-${timestamp}.json`);
     
-    // Create metrics data for storage - include everything we need to restore state
+    // Create metrics data for storage
     const storageData = {
       version: '1.0',
       savedAt: new Date().toISOString(),
@@ -408,12 +320,8 @@ function saveMetricsToDisk() {
       actionTiming: metrics.actionTiming,
       ipCounts: metrics.ipCounts,
       referrerCounts: metrics.referrerCounts,
-      recentRequests: metrics.recentRequests, // Now saving recent requests for preservation
       timeSeriesData: metrics.timeSeriesData
     };
-    
-    _logger('Saving metrics state with %d time series buckets and %d recent requests',
-            metrics.timeSeriesData.length, metrics.recentRequests.length);
     
     // Save main file
     fs.writeFileSync(metricsFilePath, JSON.stringify(storageData, null, 2));
@@ -454,35 +362,10 @@ function loadMetricsFromDisk() {
       metrics.actionTiming = savedData.actionTiming || {};
       metrics.ipCounts = savedData.ipCounts || {};
       metrics.referrerCounts = savedData.referrerCounts || {};
-      metrics.recentRequests = savedData.recentRequests || [];
       
-      // Load time series data regardless of bucket size differences
-      // We'll preserve all historical data and adapt it to our current format if needed
-      if (Array.isArray(savedData.timeSeriesData) && savedData.timeSeriesData.length > 0) {
-        _logger('Loading %d time series buckets from saved data', savedData.timeSeriesData.length);
-        
-        // Ensure each bucket has the expected structure with minutes property
-        const enhancedTimeSeriesData = savedData.timeSeriesData.map(bucket => {
-          // Extract or compute the minute value
-          if (bucket.minute === undefined) {
-            const bucketDate = new Date(bucket.timestamp);
-            bucket.minute = bucketDate.getMinutes();
-          }
-          return bucket;
-        });
-        
-        metrics.timeSeriesData = enhancedTimeSeriesData;
-        
-        // Log the time range of restored data
-        const firstBucket = new Date(metrics.timeSeriesData[0].timestamp);
-        const lastBucket = new Date(metrics.timeSeriesData[metrics.timeSeriesData.length - 1].timestamp);
-        _logger('Restored time buckets covering %s to %s', 
-                firstBucket.toISOString(),
-                lastBucket.toISOString());
-      } else {
-        // Initialize new buckets if none were found
-        _logger('No valid time series data found in saved metrics, initializing new buckets');
-        initTimeSeriesBuckets();
+      // Only load time series data if format matches
+      if (Array.isArray(savedData.timeSeriesData) && savedData.timeSeriesData.length === TIME_SERIES_BUCKETS) {
+        metrics.timeSeriesData = savedData.timeSeriesData;
       }
       
       _logger('Loaded metrics from disk: %d total requests restored', metrics.totalRequests);
