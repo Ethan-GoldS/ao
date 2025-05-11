@@ -29,6 +29,7 @@ export async function storeMetrics(details) {
       origin,
       contentType,
       requestBody,
+      rawBody,
       action,
       duration,
       timeReceived,
@@ -50,8 +51,8 @@ export async function storeMetrics(details) {
       `INSERT INTO metrics_requests (
         process_id, request_ip, request_referrer, request_method, 
         request_path, request_user_agent, request_origin, request_content_type,
-        request_body, action, duration, time_received, time_completed
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+        request_body, request_raw, action, duration, time_received, time_completed
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
       RETURNING id`,
       [
         processId,
@@ -63,6 +64,7 @@ export async function storeMetrics(details) {
         origin || 'unknown',
         contentType || 'unknown',
         parsedBody ? JSON.stringify(parsedBody) : null,
+        rawBody || (typeof requestBody === 'string' ? requestBody : JSON.stringify(requestBody)),
         action || 'unknown',
         duration || 0,
         timeReceived ? new Date(timeReceived) : new Date(),
@@ -113,6 +115,8 @@ export async function getRecentRequests(limit = 100) {
       contentType: row.request_content_type,
       request_body: row.request_body,
       requestBody: row.request_body,
+      request_raw: row.request_raw,
+      rawBody: row.request_raw, // Include both formats for compatibility
       action: row.action,
       duration: row.duration,
       timestamp: row.time_received || row.timestamp, // Use time_received if available, timestamp as fallback

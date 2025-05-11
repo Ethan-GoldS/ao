@@ -78,6 +78,15 @@ export function generateRecentRequestsTable(recentRequests, requestDetails) {
       requestBodyHtml = formatJsonForDisplay(body);
     }
     
+    // Format the raw request data if available
+    let rawRequestHtml = 'No raw data available';
+    if (req.request_raw || req.rawBody) {
+      const rawData = req.request_raw || req.rawBody;
+      rawRequestHtml = formatJsonForDisplay({
+        raw: rawData
+      });
+    }
+    
     // Format the timestamp properly
     const formattedTimestamp = formatTimestamp(req.time_received || req.timestamp);
     
@@ -98,6 +107,7 @@ export function generateRecentRequestsTable(recentRequests, requestDetails) {
           <tr><td>Action:</td><td><strong>${req.action || 'N/A'}</strong></td></tr>
           <tr><td>Duration:</td><td>${req.duration || '0'}ms</td></tr>
           <tr><td>Request Body:</td><td>${requestBodyHtml}</td></tr>
+          <tr><td>Raw Request:</td><td>${rawRequestHtml}</td></tr>
         </table>
       </div>
     `;

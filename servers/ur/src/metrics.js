@@ -137,6 +137,9 @@ export function startTracking(req) {
   // Capture the raw request body for debugging
   if (req.rawBody) {
     rawBody = req.rawBody.toString();
+  } else if (req.body) {
+    // If we have a body but no rawBody, store the original body as raw
+    rawBody = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
   }
   
   // Handle string body (common with fetch API)
@@ -173,7 +176,8 @@ export function startTracking(req) {
     referer: req.headers.referer || req.headers.referrer || 'unknown',
     origin: req.headers.origin || 'unknown',
     contentType: req.headers['content-type'] || 'unknown',
-    requestBody
+    requestBody,
+    rawBody
   };
 }
 

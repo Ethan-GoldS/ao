@@ -114,6 +114,7 @@ async function initDatabaseSchema() {
       request_origin TEXT,
       request_content_type TEXT,
       request_body JSONB,
+      request_raw TEXT,
       action TEXT,
       duration INTEGER,
       time_received TIMESTAMPTZ NOT NULL DEFAULT NOW(),
