@@ -410,13 +410,8 @@ export async function finishTracking(tracking, action) {
   }
 }
 
-/**
- * Get metrics object for dashboard and API
- * @returns {Object} Metrics object
- */
-export function getMetrics() {
-  return metrics;
-}
+// Note: The getMetrics function has been moved and enhanced
+// with async database access. See the implementation further down in this file.
 
 /**
  * Store metrics in memory (fallback for when database is not available)

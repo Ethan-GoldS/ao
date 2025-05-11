@@ -18,9 +18,9 @@ export function mountDashboard(app) {
   _logger('Mounting dashboard routes');
   
   // Main dashboard HTML route
-  app.get('/dashboard', (req, res) => {
+  app.get('/dashboard', async (req, res) => {
     try {
-      const metrics = getMetrics();
+      const metrics = await getMetrics();
       const html = generateDashboardHtml(metrics);
       res.setHeader('Content-Type', 'text/html');
       res.send(html);
@@ -33,7 +33,7 @@ export function mountDashboard(app) {
   // JSON data endpoint for AJAX refreshing
   app.get('/dashboard/data', async (req, res) => {
     try {
-      const metrics = getMetrics();
+      const metrics = await getMetrics();
       
       // Get the freshest time series data directly from the database
       // This ensures we're always displaying the latest data even if

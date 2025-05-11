@@ -675,6 +675,232 @@ export async function incrementTotalRequests() {
 // with additional fields and details. See the implementation further down in this file.
 
 /**
+ * Get process counts with enhanced statistics
+ * @returns {Promise<Object>} Process counts with timing statistics
+ */
+export async function getProcessCounts() {
+  if (!pool) return {}
+  
+  try {
+    const result = await pool.query(`
+      SELECT 
+        process_id, 
+        count, 
+        total_duration,
+        min_duration,
+        max_duration,
+        first_seen,
+        last_seen
+      FROM ur_metrics_process_counts
+      ORDER BY count DESC
+    `)
+    
+    const processCounts = {}
+    result.rows.forEach(row => {
+      processCounts[row.process_id] = {
+        count: parseInt(row.count, 10),
+        totalDuration: parseInt(row.total_duration || 0, 10),
+        avgDuration: row.count > 0 ? Math.round(parseInt(row.total_duration || 0, 10) / parseInt(row.count, 10)) : 0,
+        minDuration: row.min_duration,
+        maxDuration: row.max_duration,
+        firstSeen: row.first_seen,
+        lastSeen: row.last_seen
+      }
+    })
+    
+    return processCounts
+  } catch (err) {
+    _logger('Error getting process counts: %O', err)
+    return {}
+  }
+}
+
+/**
+ * Get action counts with enhanced statistics
+ * @returns {Promise<Object>} Action counts with timing statistics
+ */
+export async function getActionCounts() {
+  if (!pool) return {}
+  
+  try {
+    const result = await pool.query(`
+      SELECT 
+        action, 
+        count, 
+        total_duration,
+        min_duration,
+        max_duration,
+        first_seen,
+        last_seen
+      FROM ur_metrics_action_counts
+      ORDER BY count DESC
+    `)
+    
+    const actionCounts = {}
+    result.rows.forEach(row => {
+      if (!row.action) return // Skip actions with null name
+      
+      actionCounts[row.action] = {
+        count: parseInt(row.count, 10),
+        totalDuration: parseInt(row.total_duration || 0, 10),
+        avgDuration: row.count > 0 ? Math.round(parseInt(row.total_duration || 0, 10) / parseInt(row.count, 10)) : 0,
+        minDuration: row.min_duration,
+        maxDuration: row.max_duration,
+        firstSeen: row.first_seen,
+        lastSeen: row.last_seen
+      }
+    })
+    
+    return actionCounts
+  } catch (err) {
+    _logger('Error getting action counts: %O', err)
+    return {}
+  }
+}
+
+/**
+ * Get IP counts with enhanced statistics
+ * @returns {Promise<Object>} IP address counts with timing statistics
+ */
+export async function getIpCounts() {
+  if (!pool) return {}
+  
+  try {
+    const result = await pool.query(`
+      SELECT 
+        ip, 
+        count,
+        first_seen,
+        last_seen
+      FROM ur_metrics_ip_counts
+      ORDER BY count DESC
+    `)
+    
+    const ipCounts = {}
+    result.rows.forEach(row => {
+      if (!row.ip) return // Skip IPs with null value
+      
+      ipCounts[row.ip] = {
+        count: parseInt(row.count, 10),
+        firstSeen: row.first_seen,
+        lastSeen: row.last_seen
+      }
+    })
+    
+    return ipCounts
+  } catch (err) {
+    _logger('Error getting IP counts: %O', err)
+    return {}
+  }
+}
+
+/**
+ * Get referrer counts with enhanced statistics
+ * @returns {Promise<Object>} Referrer counts with timing statistics
+ */
+export async function getReferrerCounts() {
+  if (!pool) return {}
+  
+  try {
+    const result = await pool.query(`
+      SELECT 
+        referrer, 
+        count,
+        first_seen,
+        last_seen
+      FROM ur_metrics_referrer_counts
+      ORDER BY count DESC
+    `)
+    
+    const referrerCounts = {}
+    result.rows.forEach(row => {
+      if (!row.referrer) return // Skip referrers with null value
+      
+      referrerCounts[row.referrer] = {
+        count: parseInt(row.count, 10),
+        firstSeen: row.first_seen,
+        lastSeen: row.last_seen
+      }
+    })
+    
+    return referrerCounts
+  } catch (err) {
+    _logger('Error getting referrer counts: %O', err)
+    return {}
+  }
+}
+
+/**
+ * Get process timing statistics
+ * @returns {Promise<Object>} Process timing statistics
+ */
+export async function getProcessTiming() {
+  if (!pool) return {}
+  
+  try {
+    const result = await pool.query(`
+      SELECT 
+        process_id, 
+        count, 
+        total_duration
+      FROM ur_metrics_process_counts
+      WHERE count > 0
+    `)
+    
+    const processTiming = {}
+    result.rows.forEach(row => {
+      const count = parseInt(row.count, 10)
+      const totalDuration = parseInt(row.total_duration || 0, 10)
+      
+      if (count > 0) {
+        processTiming[row.process_id] = Math.round(totalDuration / count)
+      }
+    })
+    
+    return processTiming
+  } catch (err) {
+    _logger('Error getting process timing: %O', err)
+    return {}
+  }
+}
+
+/**
+ * Get action timing statistics
+ * @returns {Promise<Object>} Action timing statistics
+ */
+export async function getActionTiming() {
+  if (!pool) return {}
+  
+  try {
+    const result = await pool.query(`
+      SELECT 
+        action, 
+        count, 
+        total_duration
+      FROM ur_metrics_action_counts
+      WHERE count > 0
+    `)
+    
+    const actionTiming = {}
+    result.rows.forEach(row => {
+      if (!row.action) return // Skip actions with null name
+      
+      const count = parseInt(row.count, 10)
+      const totalDuration = parseInt(row.total_duration || 0, 10)
+      
+      if (count > 0) {
+        actionTiming[row.action] = Math.round(totalDuration / count)
+      }
+    })
+    
+    return actionTiming
+  } catch (err) {
+    _logger('Error getting action timing: %O', err)
+    return {}
+  }
+}
+
+/**
  * Get process counts
  * @returns {Promise<Object>} Process counts
  */
@@ -1187,6 +1413,58 @@ export async function getRequestDetails(processId) {
  */
 export function isConnected() {
   return !!pool
+}
+
+/**
+ * Get total requests and server start time
+ * @returns {Promise<Object>} Server info
+ */
+export async function getServerInfo() {
+  if (!pool) {
+    return {
+      startTime: new Date().toISOString(),
+      totalRequests: 0,
+      lastUpdated: new Date().toISOString()
+    };
+  }
+  
+  try {
+    // Try to get server info from database
+    const result = await pool.query(`
+      SELECT start_time, total_requests, last_updated
+      FROM ur_metrics_server_info
+      WHERE id = 1
+    `);
+    
+    if (result.rows.length > 0) {
+      return {
+        startTime: result.rows[0].start_time,
+        totalRequests: parseInt(result.rows[0].total_requests || 0, 10),
+        lastUpdated: result.rows[0].last_updated
+      };
+    }
+    
+    // If no server info exists yet, create it
+    const now = new Date();
+    await pool.query(`
+      INSERT INTO ur_metrics_server_info(start_time, total_requests, last_updated)
+      VALUES($1, 0, $1)
+      ON CONFLICT (id) DO NOTHING
+    `, [now]);
+    
+    return {
+      startTime: now.toISOString(),
+      totalRequests: 0,
+      lastUpdated: now.toISOString()
+    };
+  } catch (err) {
+    _logger('Error getting server info: %O', err);
+    return {
+      startTime: new Date().toISOString(),
+      totalRequests: 0,
+      lastUpdated: new Date().toISOString()
+    };
+  }
 }
 
 /**
