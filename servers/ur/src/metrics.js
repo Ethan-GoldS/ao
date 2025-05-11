@@ -1,10 +1,36 @@
 /**
  * Metrics service for the AO Router
  * Tracks request metrics without interfering with core proxy functionality
+ * Includes persistent storage when METRICS_STORAGE_PATH is set
  */
 import { logger } from './logger.js'
+import fs from 'fs'
+import path from 'path'
+import { config } from './config.js'
 
 const _logger = logger.child('metrics')
+
+// Storage settings
+const STORAGE_PATH = process.env.METRICS_STORAGE_PATH || null
+const STORAGE_INTERVAL_MS = 60 * 1000 // Save every minute
+
+// Check if persistent storage is enabled
+const isPersistentStorageEnabled = !!STORAGE_PATH
+
+if (isPersistentStorageEnabled) {
+  _logger('Persistent metrics storage enabled at: %s', STORAGE_PATH)
+  // Create directory if it doesn't exist
+  try {
+    if (!fs.existsSync(STORAGE_PATH)) {
+      fs.mkdirSync(STORAGE_PATH, { recursive: true })
+      _logger('Created metrics storage directory: %s', STORAGE_PATH)
+    }
+  } catch (err) {
+    _logger('Error creating metrics storage directory: %O', err)
+  }
+} else {
+  _logger('Persistent metrics storage disabled. Set METRICS_STORAGE_PATH to enable.')
+}
 
 // Store metrics in memory (will reset on server restart)
 const metrics = {
@@ -57,6 +83,9 @@ function initTimeSeriesBuckets() {
 
 // Initialize time series data
 initTimeSeriesBuckets()
+
+// Load persisted metrics if available
+loadMetricsFromDisk()
 
 /**
  * Record detailed information about a request
@@ -249,6 +278,118 @@ function refreshTimeSeriesData() {
 
 // Refresh time series data every hour
 setInterval(refreshTimeSeriesData, TIME_BUCKET_SIZE_MS);
+
+// Save metrics to disk periodically if storage is enabled
+if (isPersistentStorageEnabled) {
+  setInterval(saveMetricsToDisk, STORAGE_INTERVAL_MS);
+}
+
+/**
+ * Save current metrics to disk for persistence
+ */
+function saveMetricsToDisk() {
+  if (!isPersistentStorageEnabled) return;
+  
+  try {
+    const timestamp = new Date().toISOString().replace(/:/g, '-');
+    
+    // Save main metrics file
+    const metricsFilePath = path.join(STORAGE_PATH, 'metrics.json');
+    const metricsBackupPath = path.join(STORAGE_PATH, `metrics-backup-${timestamp}.json`);
+    
+    // Create metrics data for storage
+    const storageData = {
+      version: '1.0',
+      savedAt: new Date().toISOString(),
+      startTime: metrics.startTime,
+      totalRequests: metrics.totalRequests,
+      processCounts: metrics.processCounts,
+      actionCounts: metrics.actionCounts,
+      processTiming: metrics.processTiming,
+      actionTiming: metrics.actionTiming,
+      ipCounts: metrics.ipCounts,
+      referrerCounts: metrics.referrerCounts,
+      timeSeriesData: metrics.timeSeriesData
+    };
+    
+    // Save main file
+    fs.writeFileSync(metricsFilePath, JSON.stringify(storageData, null, 2));
+    
+    // Save backup file (once per hour)
+    if (new Date().getMinutes() === 0) {
+      fs.writeFileSync(metricsBackupPath, JSON.stringify(storageData, null, 2));
+      
+      // Clean up old backups (keep last 24)
+      cleanupOldBackups();
+    }
+    
+    _logger('Metrics saved to disk successfully');
+  } catch (err) {
+    _logger('Error saving metrics to disk: %O', err);
+  }
+}
+
+/**
+ * Load metrics from disk if available
+ */
+function loadMetricsFromDisk() {
+  if (!isPersistentStorageEnabled) return;
+  
+  try {
+    const metricsFilePath = path.join(STORAGE_PATH, 'metrics.json');
+    
+    if (fs.existsSync(metricsFilePath)) {
+      const fileContent = fs.readFileSync(metricsFilePath, 'utf8');
+      const savedData = JSON.parse(fileContent);
+      
+      // Merge saved data with current metrics
+      metrics.startTime = savedData.startTime || metrics.startTime;
+      metrics.totalRequests = savedData.totalRequests || 0;
+      metrics.processCounts = savedData.processCounts || {};
+      metrics.actionCounts = savedData.actionCounts || {};
+      metrics.processTiming = savedData.processTiming || {};
+      metrics.actionTiming = savedData.actionTiming || {};
+      metrics.ipCounts = savedData.ipCounts || {};
+      metrics.referrerCounts = savedData.referrerCounts || {};
+      
+      // Only load time series data if format matches
+      if (Array.isArray(savedData.timeSeriesData) && savedData.timeSeriesData.length === TIME_SERIES_BUCKETS) {
+        metrics.timeSeriesData = savedData.timeSeriesData;
+      }
+      
+      _logger('Loaded metrics from disk: %d total requests restored', metrics.totalRequests);
+    } else {
+      _logger('No saved metrics file found, starting with empty metrics');
+    }
+  } catch (err) {
+    _logger('Error loading metrics from disk: %O', err);
+  }
+}
+
+/**
+ * Clean up old backup files, keeping only the most recent 24
+ */
+function cleanupOldBackups() {
+  try {
+    const backupFiles = fs.readdirSync(STORAGE_PATH)
+      .filter(file => file.startsWith('metrics-backup-'))
+      .sort()
+      .reverse(); // Most recent first
+    
+    // Keep the 24 most recent backups
+    if (backupFiles.length > 24) {
+      const filesToDelete = backupFiles.slice(24);
+      
+      filesToDelete.forEach(file => {
+        fs.unlinkSync(path.join(STORAGE_PATH, file));
+      });
+      
+      _logger('Cleaned up %d old backup files', filesToDelete.length);
+    }
+  } catch (err) {
+    _logger('Error cleaning up old backup files: %O', err);
+  }
+}
 
 /**
  * Get all metrics for dashboard display

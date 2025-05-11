@@ -642,11 +642,21 @@ function generateDashboardHtml() {
         const slider = document.getElementById('timeRangeSlider');
         const sliderValue = document.getElementById('sliderValue');
         
+        // Initialize with full data range
+        let currentDisplayHours = 24;
+        
+        // Show proper time range initially
+        timeSeriesChart.data.labels = timeLabels.slice(0, currentDisplayHours);
+        timeSeriesChart.data.datasets[0].data = timeSeriesData.slice(0, currentDisplayHours);
+        timeSeriesChart.update();
+        
         slider.addEventListener('input', function() {
-          const hours = this.value;
+          const hours = parseInt(this.value);
+          currentDisplayHours = hours;
           sliderValue.innerText = 'Last ' + hours + (hours == 1 ? ' hour' : ' hours');
           
-          // Update chart with selected range - use first N hours since we reversed the arrays
+          // Always include the most recent hour (index 0) and then add the requested number of hours
+          // Since arrays are already reversed with most recent first (at index 0)
           timeSeriesChart.data.labels = timeLabels.slice(0, hours);
           timeSeriesChart.data.datasets[0].data = timeSeriesData.slice(0, hours);
           timeSeriesChart.update();
