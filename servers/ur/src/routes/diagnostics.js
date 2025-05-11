@@ -4,7 +4,7 @@
 import express from 'express'
 import { logger } from '../logger.js'
 import * as db from '../database.js'
-import { metrics } from '../metrics.js'
+import * as metrics from '../metrics.js'
 import { config } from '../config.js'
 
 const _logger = logger.child('diagnostics')
@@ -14,16 +14,19 @@ const router = express.Router()
  * Basic metrics status route
  */
 router.get('/status', (req, res) => {
+  // Get current metrics data
+  const currentMetrics = metrics.getMetrics()
+  
   res.json({
     status: 'ok',
     usePostgres: config.usePostgres,
     dbUrl: config.dbUrl ? config.dbUrl.replace(/:[^:]*@/, ':****@') : null,
     storagePath: process.env.METRICS_STORAGE_PATH || null,
     metricsInMemory: {
-      totalRequests: metrics.totalRequests || 0,
-      processCounts: Object.keys(metrics.processCounts || {}).length,
-      ipCounts: Object.keys(metrics.ipCounts || {}).length,
-      timeSeriesEntries: (metrics.timeSeriesData || []).length
+      totalRequests: currentMetrics.totalRequests || 0,
+      processCounts: Object.keys(currentMetrics.processCounts || {}).length,
+      ipCounts: Object.keys(currentMetrics.ipCounts || {}).length,
+      timeSeriesEntries: (currentMetrics.timeSeriesData || []).length
     }
   })
 })
@@ -58,7 +61,7 @@ router.get('/db', async (req, res) => {
  * Raw metrics data route
  */
 router.get('/metrics-data', (req, res) => {
-  res.json(metrics)
+  res.json(metrics.getMetrics())
 })
 
 export default router

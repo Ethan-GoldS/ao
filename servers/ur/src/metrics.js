@@ -26,6 +26,15 @@ if (usePostgres) {
   db.initDatabase().then(success => {
     if (success) {
       _logger('PostgreSQL metrics storage initialized successfully')
+      
+      // Load metrics from database into memory on startup
+      loadMetricsFromDatabase().then(loaded => {
+        if (loaded) {
+          _logger('Successfully loaded metrics from PostgreSQL database')
+        } else {
+          _logger('Failed to load metrics from PostgreSQL, using empty metrics')
+        }
+      })
     } else {
       _logger('Failed to initialize PostgreSQL metrics storage')
     }
@@ -604,6 +613,78 @@ function cleanupOldBackups() {
     }
   } catch (err) {
     _logger('Error cleaning up old backup files: %O', err);
+  }
+}
+
+/**
+ * Load metrics from PostgreSQL database into memory on startup
+ * This ensures we have data available for the dashboard even when using PostgreSQL
+ */
+async function loadMetricsFromDatabase() {
+  if (!usePostgres || !db.isConnected()) {
+    return false;
+  }
+  
+  try {
+    _logger('Loading metrics from PostgreSQL into memory...');
+    
+    // Load server info
+    const serverInfo = await db.getServerInfo();
+    if (serverInfo) {
+      metrics.startTime = serverInfo.startTime;
+      metrics.totalRequests = serverInfo.totalRequests;
+      _logger('Loaded server info: %d total requests', metrics.totalRequests);
+    }
+    
+    // Load process counts
+    const processCounts = await db.getProcessCounts();
+    if (processCounts) {
+      metrics.processCounts = processCounts;
+      _logger('Loaded %d process counts', Object.keys(processCounts).length);
+    }
+    
+    // Load action counts
+    const actionCounts = await db.getActionCounts();
+    if (actionCounts) {
+      metrics.actionCounts = actionCounts;
+      _logger('Loaded %d action counts', Object.keys(actionCounts).length);
+    }
+    
+    // Load IP counts
+    const ipCounts = await db.getIpCounts();
+    if (ipCounts) {
+      metrics.ipCounts = ipCounts;
+      _logger('Loaded %d IP counts', Object.keys(ipCounts).length);
+    }
+    
+    // Load referrer counts
+    const referrerCounts = await db.getReferrerCounts();
+    if (referrerCounts) {
+      metrics.referrerCounts = referrerCounts;
+      _logger('Loaded %d referrer counts', Object.keys(referrerCounts).length);
+    }
+    
+    // Load time series data
+    const timeSeriesData = await db.getTimeSeriesData();
+    if (timeSeriesData && timeSeriesData.length > 0) {
+      metrics.timeSeriesData = timeSeriesData;
+      _logger('Loaded %d time series data points', timeSeriesData.length);
+    } else {
+      // Initialize time series if none exists
+      initializeTimeSeriesData();
+    }
+    
+    // Load recent requests and details
+    const recentRequests = await db.getRecentRequests();
+    if (recentRequests && recentRequests.length > 0) {
+      metrics.recentRequests = recentRequests;
+      _logger('Loaded %d recent requests', recentRequests.length);
+    }
+    
+    return true;
+  } catch (err) {
+    _logger('Error loading metrics from database: %O', err);
+    return false;
   }
 }
 
