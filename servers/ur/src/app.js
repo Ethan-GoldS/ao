@@ -9,6 +9,7 @@ import { proxyWith } from './proxy.js'
 import { redirectWith } from './redirect.js'
 import { metricsMiddleware } from './middleware/metricsMiddleware.js'
 import { mountDashboard } from './routes/dashboard.js'
+import diagnosticsRoutes from './routes/diagnostics.js'
 
 const middlewareWithByStrategy = {
   proxy: proxyWith,
@@ -29,6 +30,11 @@ pipe(
   (app) => {
     // Mount dashboard route before proxy middleware
     mountDashboard(app)
+    
+    // Mount diagnostics routes for debugging
+    app.use('/diagnostics', diagnosticsRoutes)
+    logger('Diagnostics routes mounted at /diagnostics')
+    
     return app
   },
   middlewareWith({ ...config }),

@@ -19,6 +19,8 @@ export async function initDatabase() {
     return false
   }
 
+  _logger('Attempting to connect to PostgreSQL with URL: %s', config.dbUrl.replace(/:\/\/[^:]+:[^@]+@/, '://****:****@'))
+  
   try {
     // Create connection pool
     pool = new pg.Pool({
@@ -27,16 +29,27 @@ export async function initDatabase() {
       idleTimeoutMillis: 30000,
       connectionTimeoutMillis: 5000,
     })
+    
+    // Handle pool errors
+    pool.on('error', (err) => {
+      _logger('Unexpected database pool error: %O', err)
+    })
 
     // Test connection
     const client = await pool.connect()
-    const result = await client.query('SELECT NOW()')
+    _logger('Successfully acquired PostgreSQL connection')
+    
+    const result = await client.query('SELECT NOW(), current_database() as db_name, current_schema as schema_name')
     client.release()
 
-    _logger('Connected to PostgreSQL: %s', result.rows[0].now)
+    _logger('Connected to PostgreSQL database %s using schema %s at %s', 
+      result.rows[0].db_name,
+      result.rows[0].schema_name, 
+      result.rows[0].now)
     
     // Initialize tables
-    await createTables()
+    const tablesCreated = await createTables()
+    _logger('Database tables initialized: %s', tablesCreated ? 'SUCCESS' : 'FAILED')
     
     return true
   } catch (err) {
@@ -48,12 +61,65 @@ export async function initDatabase() {
 /**
  * Create necessary database tables if they don't exist
  */
+/**
+ * For diagnostic purposes - checks database connection and returns info about tables
+ */
+export async function getDatabaseDiagnostics() {
+  if (!pool) return { connected: false, message: 'No database pool created' }
+  
+  try {
+    const client = await pool.connect()
+    try {
+      // Check connection
+      const connectionInfo = await client.query('SELECT current_database() as db_name, current_schema as schema_name')
+      
+      // Check tables
+      const tablesQuery = await client.query(
+        "SELECT table_name, (SELECT COUNT(*) FROM information_schema.columns WHERE table_name = t.table_name) as column_count " + 
+        "FROM information_schema.tables t WHERE table_schema = current_schema() AND table_name LIKE 'ur_metrics_%'"
+      )
+      
+      // Check record counts
+      const recordCounts = []
+      for (const table of tablesQuery.rows) {
+        try {
+          const countResult = await client.query(`SELECT COUNT(*) FROM ${table.table_name}`)
+          recordCounts.push({ table: table.table_name, count: parseInt(countResult.rows[0].count) })
+        } catch (err) {
+          recordCounts.push({ table: table.table_name, error: err.message })
+        }
+      }
+      
+      return {
+        connected: true,
+        database: connectionInfo.rows[0].db_name,
+        schema: connectionInfo.rows[0].schema_name,
+        tables: tablesQuery.rows,
+        recordCounts
+      }
+    } finally {
+      client.release()
+    }
+  } catch (err) {
+    return { connected: false, error: err.message }
+  }
+}
+
 async function createTables() {
   const client = await pool.connect()
   
   try {
     // Start transaction
     await client.query('BEGIN')
+    
+    // Try to create ur_metrics schema if it doesn't exist
+    try {
+      await client.query('CREATE SCHEMA IF NOT EXISTS ur_metrics')
+      await client.query('SET search_path TO ur_metrics, public')
+      _logger('Created or confirmed ur_metrics schema')
+    } catch (err) {
+      _logger('Could not create ur_metrics schema, using default schema: %s', err.message)
+    }
     
     // Create requests table
     await client.query(`
