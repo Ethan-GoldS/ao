@@ -16,10 +16,9 @@ const _logger = logger.child('dashboard');
 export function mountDashboard(app) {
   _logger('Mounting dashboard routes');
   
-  app.get('/dashboard', async (req, res) => {
+  app.get('/dashboard', (req, res) => {
     try {
-      // getMetrics is now async and returns a Promise
-      const metrics = await getMetrics();
+      const metrics = getMetrics();
       const html = generateDashboardHtml(metrics);
       res.setHeader('Content-Type', 'text/html');
       res.send(html);
@@ -37,20 +36,10 @@ export function mountDashboard(app) {
 export function setupDashboardRoutes(metricsService) {
   _logger('Setting up dashboard routes');
 
-  router.get('/', async (req, res) => {
-    try {
-      _logger('Handling dashboard request');
-      // Handle both async and sync getMetrics implementations
-      const metrics = metricsService.getMetrics instanceof Function
-        ? await metricsService.getMetrics()
-        : metricsService.getMetrics;
-      
-      res.setHeader('Content-Type', 'text/html');
-      res.send(generateDashboardHtml(metrics));
-    } catch (err) {
-      _logger('Error handling dashboard request: %o', err);
-      res.status(500).send('Internal Server Error');
-    }
+  router.get('/', (req, res) => {
+    _logger('Handling dashboard request');
+    const metrics = metricsService.getMetrics();
+    res.send(generateDashboardHtml(metrics));
   });
 
   return router;

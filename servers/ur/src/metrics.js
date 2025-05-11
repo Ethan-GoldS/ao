@@ -1,64 +1,53 @@
 /**
  * Metrics service for the AO Router
  * Tracks request metrics without interfering with core proxy functionality
- * Uses SQLite for robust storage and querying capabilities
+ * Uses SQLite database for persistent storage
  */
 import { logger } from './logger.js'
-import * as MetricsDb from './metrics-db.js'
 import { config } from './config.js'
+import * as db from './database.js'
 
 const _logger = logger.child('metrics')
 
-// Initialize database when this module is loaded
-MetricsDb.initMetricsDb().then(() => {
-  _logger('SQLite metrics database initialized successfully')
-}).catch(err => {
-  _logger('Failed to initialize SQLite metrics database: %O', err)
-})
+// Maximum number of recent requests to keep
+const MAX_RECENT_REQUESTS = 100
 
-/**
- * Constants for metrics configuration
- */
-const TIME_SERIES_BUCKETS = 24 // Default number of time buckets (24 hours)
-const TIME_BUCKET_SIZE_MS = 60 * 60 * 1000 // Default bucket size (1 hour)
+// Time series settings
+const TIME_SERIES_BUCKETS = 24
+const TIME_BUCKET_SIZE_MS = 60 * 60 * 1000 // 1 hour
+
+// In-memory cache for recent requests to avoid frequent database reads
+let recentRequestsCache = []
+
+// Server start time from database or current time if not available
+const startTime = db.getServerStartTime()
+
+_logger('Metrics initialized with SQLite database storage')
+_logger('Server start time: %s', startTime)
 
 /**
  * Record detailed information about a request
  * @param {Object} details Request details object
- * @returns {Promise<number|null>} The ID of the inserted record or null if failed
  */
-export async function recordRequestDetails(details) {
-  if (!details || !details.processId) return null;
+export function recordRequestDetails(details) {
+  if (!details || !details.processId) return;
   
-  const { processId, ip, referer, timestamp } = details;
+  // Store request details in database
+  db.recordRequestDetails(details);
   
-  try {
-    // Store in SQLite database
-    const requestId = await MetricsDb.recordRequest({
-      timestamp,
-      processId,
-      ip: ip || 'unknown',
-      action: null,
-      duration: 0,
-      details: details  // Save all details for future reference
-    });
-    
-    _logger('Recorded request details for process %s', processId);
-    return requestId;
-  } catch (err) {
-    _logger('Error recording request details to SQLite: %O', err);
-    return null;
-  }
+  _logger('Recorded request details for process %s', details.processId);
 }
 
 /**
- * Helper function to normalize timestamps consistently
- * @param {Date|String} date - Date object or ISO string
- * @returns {Date} Date object normalized to consistent timezone
+ * Update time series data with a new request
+ * This is now handled by the database module
+ * @param {String} processId Process ID
+ * @param {String} timestamp ISO timestamp string
  */
-function normalizeTimestamp(date) {
-  // Convert to Date object if it's a string
-  return typeof date === 'string' ? new Date(date) : date;
+function updateTimeSeriesData(processId, timestamp) {
+  // This is now handled directly in the database module
+  // This function remains for compatibility but delegates to database
+  db.updateTimeSeriesData(processId, timestamp);
 }
 
 /**
@@ -90,12 +79,7 @@ export function startTracking(req) {
   return {
     startTime: Date.now(),
     processId: req.query['process-id'] || null,
-    ip: req.ip || req.headers['x-forwarded-for'] || 'unknown',
-    headers: req.headers,
-    path: req.path,
-    method: req.method,
-    query: req.query,
-    body: req.body
+    ip: req.ip || req.headers['x-forwarded-for'] || 'unknown'
   };
 }
 
@@ -103,116 +87,126 @@ export function startTracking(req) {
  * Finish tracking a request and record metrics
  * @param {Object} tracking Request tracking object from startTracking
  * @param {String} action Action from request
- * @returns {Promise<number|null>} The ID of the inserted record or null if failed
  */
-export async function finishTracking(tracking, action) {
-  if (!tracking || !tracking.startTime) return null;
+export function finishTracking(tracking, action) {
+  if (!tracking || !tracking.startTime) return;
   
   const duration = tracking.duration || (Date.now() - tracking.startTime);
-  const { processId, ip, headers, path, method, query, body } = tracking;
+  const { processId, ip } = tracking;
   
-  if (!processId) return null;
+  if (!processId) return;
   
-  // Create timestamp from the actual request start time
-  const timestamp = new Date(tracking.startTime).toISOString();
+  // Create request object
+  const requestData = {
+    timestamp: new Date(tracking.startTime).toISOString(), // Use actual request time
+    processId,
+    ip,
+    action,
+    duration
+  };
   
-  try {
-    // Store in SQLite database with all metadata
-    const requestId = await MetricsDb.recordRequest({
-      timestamp,
-      processId,
-      ip,
-      action,
-      duration,
-      details: {
-        headers,
-        path,
-        method,
-        query,
-        body: body ? JSON.stringify(body).substring(0, 1000) : null // Truncate to avoid overly large storage
-      }
-    });
-    
-    _logger('Recorded metrics for process %s, action %s, duration %dms', processId, action, duration);
-    return requestId;
-  } catch (err) {
-    _logger('Error recording request metrics to SQLite: %O', err);
-    return null;
+  // Record in database
+  db.recordRequest(requestData);
+  
+  // Update in-memory cache for quick access to recent requests
+  recentRequestsCache.unshift(requestData);
+  if (recentRequestsCache.length > MAX_RECENT_REQUESTS) {
+    recentRequestsCache.length = MAX_RECENT_REQUESTS;
   }
+  
+  _logger('Recorded metrics for process %s, action %s, duration %dms', processId, action, duration);
 }
 
-/**
- * Get time series data from the SQLite database
- * @param {Object} options Time series options
- * @param {Date} [options.startTime] Start time for the range
- * @param {Date} [options.endTime] End time for the range
- * @param {string} [options.interval='hour'] Time grouping interval (minute, 5min, 10min, 15min, 30min, hour, day)
- * @param {string} [options.processId] Optional filter by process ID
- * @returns {Promise<Array>} Array of time series data points
- */
-export async function getTimeSeriesData(options = {}) {
-  try {
-    // Default to last 24 hours if not specified
-    const endTime = options.endTime || new Date();
-    const startTime = options.startTime || new Date(endTime.getTime() - (TIME_SERIES_BUCKETS * TIME_BUCKET_SIZE_MS));
-    
-    // Get time series data from database
-    const timeSeriesData = await MetricsDb.getTimeSeriesData({
-      startTime,
-      endTime,
-      interval: options.interval || 'hour',
-      processId: options.processId
-    });
-    
-    _logger('Retrieved time series data from SQLite: %d data points', timeSeriesData.length);
-    return timeSeriesData;
-  } catch (err) {
-    _logger('Error retrieving time series data: %O', err);
-    return [];  
-  }
-}
-
-/**
- * Search for metrics data with complex criteria
- * @param {Object} criteria Search criteria
- * @returns {Promise<Array>} Matching requests
- */
-export async function searchMetrics(criteria) {
-  return MetricsDb.searchMetrics(criteria);
-}
-
-/**
- * Get detailed information for a specific request
- * @param {number} requestId Request ID
- * @returns {Promise<Object>} Complete request details
- */
-export async function getRequestDetails(requestId) {
-  return MetricsDb.getRequestDetails(requestId);
-}
+// No need for periodic metrics saving as SQLite handles persistence automatically
+// Refresh time series data every hour to ensure we have current buckets
+setInterval(() => {
+  _logger('Refreshing time series data');
+}, TIME_BUCKET_SIZE_MS);
 
 /**
  * Get all metrics for dashboard display
- * @returns {Promise<Object>} All metrics data from the database
+ * @returns {Object} All metrics
  */
-export async function getMetrics() {
-  try {
-    // Get fresh metrics from SQLite
-    const metrics = await MetricsDb.getAllMetrics();
-    return metrics;
-  } catch (err) {
-    _logger('Error getting metrics from SQLite: %O', err);
-    // Return empty data in case of error
-    return {
-      startTime: new Date().toISOString(),
-      totalRequests: 0,
-      recentRequests: [],
-      processCounts: {},
-      actionCounts: {},
-      processTiming: {},
-      actionTiming: {},
-      ipCounts: [],
-      referrerCounts: [],
-      timeSeriesData: []
+export function getMetrics() {
+  // Calculate average durations for easier display
+  const processTimingWithAvg = {};
+  Object.keys(metrics.processTiming).forEach(processId => {
+    const { totalDuration, count } = metrics.processTiming[processId];
+    processTimingWithAvg[processId] = {
+      totalDuration,
+      count,
+      avgDuration: count > 0 ? totalDuration / count : 0
     };
-  }
+  });
+  
+  const actionTimingWithAvg = {};
+  Object.keys(metrics.actionTiming).forEach(action => {
+    const { totalDuration, count } = metrics.actionTiming[action];
+    actionTimingWithAvg[action] = {
+      totalDuration,
+      count,
+      avgDuration: count > 0 ? totalDuration / count : 0
+    };
+  });
+  
+  // Get process and action counts from database
+  const processCounts = db.getProcessCounts();
+  const actionCounts = db.getActionCounts();
+  
+  // Get timing metrics from database
+  const processTiming = db.getProcessTiming();
+  const actionTiming = db.getActionTiming();
+  
+  // Get IP and referrer counts from database
+  const ipCounts = db.getIpCounts();
+  const referrerCounts = db.getReferrerCounts();
+  
+  // Get time series data from database
+  const timeSeriesData = db.getTimeSeriesData(TIME_SERIES_BUCKETS);
+  
+  // Build request details object by process ID
+  const requestDetails = {};
+  
+  // Only populate request details for processes that have recent requests
+  // This avoids loading all details at once, which could be inefficient
+  const processIds = Object.keys(processCounts);
+  processIds.forEach(processId => {
+    // Fetch details for this process
+    requestDetails[processId] = db.getRequestDetails(processId, 20);
+  });
+  
+  return {
+    // Recent requests 
+    recentRequests,
+    
+    // Request details keyed by process ID
+    requestDetails,
+    
+    // Process counts for histogram
+    processCounts,
+    
+    // Action counts for histogram
+    actionCounts,
+    
+    // Process timing metrics (total duration and count)
+    processTiming,
+    
+    // Action timing metrics (total duration and count)
+    actionTiming,
+    
+    // IP address counts
+    ipCounts,
+    
+    // Referrer counts
+    referrerCounts,
+    
+    // Time series data for charts
+    timeSeriesData,
+    
+    // Total number of requests
+    totalRequests: db.getTotalRequests(),
+    
+    // Server start time
+    startTime
+  };
 }

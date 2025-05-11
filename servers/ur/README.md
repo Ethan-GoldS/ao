@@ -12,6 +12,7 @@ This service will deterministically route `ao` Process operations to an underlyi
 - [Debug Logging](#debug-logging)
 - [Project Structure](#project-structure)
 - [System Requirements](#system-requirements)
+- [Metrics Database Structure](#metrics-database-structure)
 
 <!-- tocstop -->
 
@@ -67,3 +68,45 @@ So in summary, this `ao` Unit Server system requirements are:
 - an ability for secrets to be Injected into the Environment
 - an ability to accept Ingress from the Internet
 - an ability to Egress to other `ao` Units
+
+## Metrics Database Structure
+
+The `ao` Unit Router uses SQLite for storing metrics data. The database is stored in a file specified by the `METRICS_DB_PATH` environment variable, or defaults to `./data/metrics.db` if not specified.
+
+### Database Tables
+
+| Table | Purpose | Primary Key | Fields |
+|-------|---------|-------------|--------|
+| `requests` | Stores individual request records | `id` (auto) | `timestamp`, `process_id`, `action`, `ip`, `duration`, `created_at` |
+| `process_counts` | Aggregated statistics by process | `process_id` | `count`, `total_duration` |
+| `action_counts` | Aggregated statistics by action | `action` | `count`, `total_duration` |
+| `ip_counts` | Counts of requests by IP address | `ip` | `count` |
+| `referrer_counts` | Counts of requests by referrer | `referrer` | `count` |
+| `time_series` | Time-based aggregated metrics | `bucket_time` | `total_requests`, `hour`, `process_counts` (JSON) |
+| `request_details` | Detailed information about requests | `id` (auto) | `process_id`, `timestamp`, `ip`, `referer`, `details` (JSON), `created_at` |
+| `meta` | Server metadata | `key` | `value` |
+
+### Data Flow
+
+1. When a request is received:
+   - Basic request data is stored in the `requests` table
+   - Aggregated counts are updated in `process_counts` and `action_counts` tables
+   - IP and referrer statistics are updated in their respective tables
+   - Time series data is updated in the appropriate time bucket
+
+2. For dashboard display:
+   - Recent requests are fetched from the `requests` table
+   - Process and action statistics are retrieved from their respective tables
+   - Time series data is retrieved for chart rendering
+
+3. Database Organization:
+   - Each request is stored as an individual entry in the `requests` table
+   - SQLite's transaction system ensures data integrity during concurrent writes
+   - Time series data is organized in hourly buckets for efficient retrieval and display
+
+### Performance Considerations
+
+- The database uses the WAL (Write-Ahead Logging) journal mode for better concurrency
+- For frequently accessed data like recent requests, an in-memory cache is used
+- Request details are lazily loaded only when needed to reduce database load
+- Indexes are defined on frequently queried fields for faster access
