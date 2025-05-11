@@ -47,6 +47,7 @@ export function metricsMiddleware() {
     // Safely capture raw request data including headers and other metadata
     let rawRequestData = null;
     let capturedBody = null; // For storing the actual request body/payload
+    let rawBodyBuffer = null;
     
     try {
       // Create a copy of important request data for metrics
@@ -58,10 +59,80 @@ export function metricsMiddleware() {
         timestamp: new Date().toISOString()
       });
       
-      // REMOVED: Previous approach interfered with the request stream needed by the proxy
-      // Instead we'll capture the body in the response end handler which is safer
+      // NEW APPROACH: Capture request body without consuming the stream
+      // This uses a non-invasive technique to copy request data
+      if ((req.method === 'POST' || req.method === 'PUT') && 
+          req.headers['content-type']?.includes('application/json')) {
+        
+        // Set up a data buffer to collect chunks
+        let chunks = [];
+        let totalLength = 0;
+        
+        // Original request handlers
+        const originalOn = req.on;
+        const originalAddListener = req.addListener;
+        
+        // Override on/addListener methods to spy on data without consuming it
+        function spyOn(eventName, listener) {
+          if (eventName === 'data' || eventName === 'end') {
+            // Create wrapper that allows us to peek at the data
+            const wrapper = function(chunk) {
+              if (eventName === 'data' && chunk) {
+                // Make a copy of the chunk
+                const copy = Buffer.from(chunk);
+                chunks.push(copy);
+                totalLength += copy.length;
+              } else if (eventName === 'end') {
+                // Process collected data when the request ends
+                try {
+                  if (totalLength > 0) {
+                    rawBodyBuffer = Buffer.concat(chunks, totalLength);
+                    const bodyString = rawBodyBuffer.toString('utf-8');
+                    
+                    // Try to parse as JSON
+                    if (bodyString.trim().startsWith('{')) {
+                      try {
+                        capturedBody = JSON.parse(bodyString);
+                        
+                        // Update the rawRequestData with the captured body
+                        const rawDataObj = JSON.parse(rawRequestData);
+                        rawDataObj.body = capturedBody;
+                        rawRequestData = JSON.stringify(rawDataObj);
+                        
+                        // Store raw body for later use
+                        req._rawBodyForMetrics = bodyString;
+                        req._parsedBodyForMetrics = capturedBody;
+                        
+                        _logger('Successfully captured request body for metrics');
+                      } catch (jsonErr) {
+                        _logger('Error parsing request body as JSON: %s', jsonErr.message);
+                        req._rawBodyForMetrics = bodyString;
+                      }
+                    }
+                  }
+                } catch (e) {
+                  _logger('Error processing captured request body: %s', e.message);
+                }
+              }
+              
+              // Always call the original listener
+              return listener.apply(this, arguments);
+            };
+            
+            // Call the original method with our wrapper
+            return originalOn.call(req, eventName, wrapper);
+          } else {
+            // For other events, use the original behavior
+            return originalOn.call(req, eventName, listener);
+          }
+        }
+        
+        // Install our spy methods
+        req.on = spyOn;
+        req.addListener = spyOn;
+      }
       
-      // We'll set a flag to indicate we want to try to capture the body later
+      // Set a flag to indicate we're capturing metrics
       req._captureBodyForMetrics = true;
     } catch (err) {
       _logger('Error capturing raw request data: %O', err);
@@ -107,8 +178,19 @@ export function metricsMiddleware() {
         let responseRaw = null;
         let requestBodyData = null;
         
-        // Extract the request body from the response, since the request body may contain important metadata
-        // that we couldn't safely capture earlier without breaking the proxy
+        // Get previously captured request body if available
+        if (req._parsedBodyForMetrics) {
+          requestBodyData = req._parsedBodyForMetrics;
+        } else if (req._rawBodyForMetrics) {
+          // Try to parse the raw body if we have it
+          try {
+            requestBodyData = JSON.parse(req._rawBodyForMetrics);
+          } catch (e) {
+            requestBodyData = req._rawBodyForMetrics;
+          }
+        }
+        
+        // Extract response data
         if (args[0] && typeof args[0] === 'string') {
           // Store the raw response text
           responseRaw = args[0];
@@ -117,9 +199,9 @@ export function metricsMiddleware() {
             // Try to parse the response as JSON
             responseData = JSON.parse(args[0]);
 
-            // Extract request body from the response if this is a dry-run request
+            // If we didn't get request body earlier, try extracting it from response
             // The requestBody is often echoed in the response
-            if (responseData && req.path && req.path.includes('dry-run')) {
+            if (!requestBodyData && responseData && req.path && req.path.includes('dry-run')) {
               // Try to extract request body data
               if (responseData.Input && responseData.Input.Data) {
                 requestBodyData = responseData.Input.Data;
@@ -180,14 +262,41 @@ export function metricsMiddleware() {
           }
         }
         
-        // Create an enhanced raw request data object
+        // Create an enhanced raw request data object with all available information
         let enhancedRawData = tracking.rawBody;
-        if (requestBodyData) {
+        // First use directly captured request body if available
+        if (req._parsedBodyForMetrics || req._rawBodyForMetrics || requestBodyData) {
           try {
-            // Add the extracted request body to our raw data
+            // Add all data we have to our raw data object
             const rawDataObj = JSON.parse(rawRequestData);
-            rawDataObj.body = requestBodyData;
+            
+            // Add the body data we've collected
+            if (req._parsedBodyForMetrics) {
+              rawDataObj.body = req._parsedBodyForMetrics;
+            } else if (requestBodyData) {
+              rawDataObj.body = requestBodyData;
+            } else if (req._rawBodyForMetrics && typeof req._rawBodyForMetrics === 'string') {
+              // Try to parse or use as string
+              try {
+                if (req._rawBodyForMetrics.trim().startsWith('{')) {
+                  rawDataObj.body = JSON.parse(req._rawBodyForMetrics);
+                } else {
+                  rawDataObj.rawBodyText = req._rawBodyForMetrics;
+                }
+              } catch (parseErr) {
+                rawDataObj.rawBodyText = req._rawBodyForMetrics;
+              }
+            }
+            
+            // Include full response data if available - this is useful for debugging
+            if (responseData) {
+              rawDataObj.responseData = responseData;
+            } else if (responseRaw) {
+              rawDataObj.responseRaw = responseRaw.substring(0, 1000); // Limit size
+            }
+            
             enhancedRawData = JSON.stringify(rawDataObj);
+            _logger('Enhanced raw data created with request and response information');
           } catch (e) {
             _logger('Error enhancing raw request data: %s', e.message);
           }
