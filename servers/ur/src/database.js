@@ -6,14 +6,15 @@ import BetterSqlite3 from 'better-sqlite3'
 import path from 'path'
 import fs from 'fs'
 import { logger } from './logger.js'
+import { config } from './config.js'
 
 const _logger = logger.child('database')
 
-// Default database location if not specified in environment
+// Default database location if not specified in config
 const DEFAULT_DB_PATH = './data/metrics.db'
 
-// Get the database path from environment or use default
-const DB_PATH = process.env.METRICS_DB_PATH || DEFAULT_DB_PATH
+// Get the database path from config or use default
+const DB_PATH = config.metricsStoragePath || DEFAULT_DB_PATH
 
 // Create directory if it doesn't exist
 const dbDir = path.dirname(DB_PATH)
