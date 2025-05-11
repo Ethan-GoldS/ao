@@ -15,14 +15,20 @@ export function initializeTimeControls(timeSeriesData) {
   const now = new Date();
   const sixHoursAgo = new Date(now.getTime() - (6 * 60 * 60 * 1000));
   
-  // Format helper functions
+  // Format helper functions for date/time pickers
   function formatDateForInput(date) {
-    return date.toISOString().split('T')[0];
+    // Format YYYY-MM-DD for date input using local timezone
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
   }
   
   function formatTimeForInput(date) {
-    // Format time as HH:MM
-    return date.toTimeString().substring(0, 5);
+    // Format HH:MM for time input using local timezone
+    const hours = String(date.getHours()).padStart(2, '0');
+    const minutes = String(date.getMinutes()).padStart(2, '0');
+    return `${hours}:${minutes}`;
   }
 
   // Return the time chart HTML
@@ -97,18 +103,27 @@ export function getTimeChartScript(rawTimeData) {
       processCounts: bucket.processCounts
     }));
     
+
+    
     // Initialize time chart
     const timeCtx = document.getElementById('timeSeriesChart').getContext('2d');
     let timeSeriesChart;
     
-    // Format date for input fields
+    // Format date for input fields - uses local timezone
     function formatDateForInput(date) {
-      return date.toISOString().split('T')[0];
+      // Format YYYY-MM-DD for date input using local timezone
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      return year + '-' + month + '-' + day;
     }
     
-    // Format time for input fields (HH:MM)
+    // Format time for input fields (HH:MM) - uses local timezone
     function formatTimeForInput(date) {
-      return date.toTimeString().substring(0, 5);
+      // Format HH:MM for time input using local timezone
+      const hours = String(date.getHours()).padStart(2, '0');
+      const minutes = String(date.getMinutes()).padStart(2, '0');
+      return hours + ':' + minutes;
     }
     
     // Initialize date/time pickers
@@ -122,13 +137,10 @@ export function getTimeChartScript(rawTimeData) {
     
     // Create the initial chart
     function initializeTimeChart() {
-      // Get the current time for end time
+      // Always make sure we're using the current time for end time
       const now = new Date();
-      // Set end time to now if not already set
-      if (!endDatePicker.value) {
-        endDatePicker.value = formatDateForInput(now);
-        endTimePicker.value = formatTimeForInput(now);
-      }
+      endDatePicker.value = formatDateForInput(now);
+      endTimePicker.value = formatTimeForInput(now);
       
       // Get date range from pickers
       const startDate = getStartDateTime();
@@ -187,14 +199,34 @@ export function getTimeChartScript(rawTimeData) {
     
     // Get start date and time from pickers
     function getStartDateTime() {
-      const date = new Date(startDatePicker.value + 'T' + startTimePicker.value);
+      // Parse individual components to ensure local time interpretation
+      const dateParts = startDatePicker.value.split('-');
+      const timeParts = startTimePicker.value.split(':');
+      
+      // Create date with local time values
+      const date = new Date(
+        parseInt(dateParts[0]),             // year
+        parseInt(dateParts[1]) - 1,         // month (0-based)
+        parseInt(dateParts[2]),             // day
+        parseInt(timeParts[0]),             // hour
+        parseInt(timeParts[1])              // minute
+      );
+      
+      console.log('Start date parsed:', date.toLocaleString());
       return date;
     }
     
-    // Get end date and time from pickers
+    // Get end date and time from pickers - always returns current time
     function getEndDateTime() {
-      const date = new Date(endDatePicker.value + 'T' + endTimePicker.value);
-      return date;
+      // Always use current time for end time
+      const now = new Date();
+      
+      // Update the input fields with current time
+      endDatePicker.value = formatDateForInput(now);
+      endTimePicker.value = formatTimeForInput(now);
+      
+      console.log('End time (now):', now.toLocaleString());
+      return now;
     }
     
     // Filter data points by time range
@@ -295,14 +327,19 @@ export function getTimeChartScript(rawTimeData) {
     
     // Update the chart with new time range and interval
     function updateTimeChart() {
-      // Always use the current time for the end time
+      // IMPORTANT: Always use the current time for the end time on every update
       const now = new Date();
+      
+      console.log('Current time:', now.toLocaleString());
+      console.log('Setting end time to current time');
+      
+      // Force the end date/time to be now
       endDatePicker.value = formatDateForInput(now);
       endTimePicker.value = formatTimeForInput(now);
       
-      // Get date range
+      // Get date range (using our updated end time)
       const startDate = getStartDateTime();
-      const endDate = getEndDateTime();
+      const endDate = now; // Use now directly instead of getEndDateTime()
       
       // Filter and group data
       const filteredData = filterDataByTimeRange(startDate, endDate);
@@ -324,20 +361,9 @@ export function getTimeChartScript(rawTimeData) {
       }
     }
     
-    // Set up event listeners for time range controls
-    document.getElementById('applyTimeSettings').addEventListener('click', function() {
-      updateTimeChart();
-    });
-    
-    // Handle preset time range buttons
-    document.querySelectorAll('.time-preset').forEach(button => {
-      button.addEventListener('click', function() {
-        // Remove active class from all presets
-        document.querySelectorAll('.time-preset').forEach(btn => btn.classList.remove('active'));
-        // Add active class to clicked button
-        this.classList.add('active');
         
-        const value = this.dataset.value;
+    // Add point data to current group
+    currentGroup.requests += point.requests;
         // Always use the most current time for end time
         const now = new Date();
         let startDate;
@@ -379,6 +405,25 @@ export function getTimeChartScript(rawTimeData) {
         // Update chart
         updateTimeChart();
       });
+    });
+    
+    // Initialize with default settings on page load
+    document.addEventListener('DOMContentLoaded', function() {
+      console.log('Dashboard initialized - setting 6h preset as default');
+      // Click the 6h preset button to initialize with correct time range
+      const sixHourPreset = document.querySelector('.time-preset[data-value="6h"]');
+      if (sixHourPreset) {
+        sixHourPreset.click();
+      } else {
+        // Fallback if button not found
+        const now = new Date();
+        const sixHoursAgo = new Date(now.getTime() - (6 * 60 * 60 * 1000));
+        startDatePicker.value = formatDateForInput(sixHoursAgo);
+        startTimePicker.value = formatTimeForInput(sixHoursAgo);
+        endDatePicker.value = formatDateForInput(now);
+        endTimePicker.value = formatTimeForInput(now);
+        updateTimeChart();
+      }
     });
   `;
 }
