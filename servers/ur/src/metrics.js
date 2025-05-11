@@ -94,7 +94,37 @@ function initTimeSeriesBuckets() {
 // Initialize time series data
 initTimeSeriesBuckets()
 
-// Load persisted metrics if available
+// Force reset time series data before loading from disk to ensure clean state
+function forceResetTimeSeriesData() {
+  _logger('FORCING RESET of all time series data to fix timestamp issues');
+  metrics.timeSeriesData = [];
+  initTimeSeriesBuckets();
+  
+  // Delete existing metrics file to ensure clean state
+  if (isPersistentStorageEnabled) {
+    try {
+      const metricsFilePath = path.join(STORAGE_PATH, 'metrics.json');
+      if (fs.existsSync(metricsFilePath)) {
+        fs.unlinkSync(metricsFilePath);
+        _logger('Deleted old metrics file to ensure fresh start');
+      }
+    } catch (err) {
+      _logger('Error deleting metrics file: %O', err);
+    }
+  }
+}
+
+// Force reset time series data to fix timestamp issues
+forceResetTimeSeriesData();
+
+// Reinitialize with current time
+metrics.startTime = new Date().toISOString();
+metrics.totalRequests = 0;
+metrics.processCounts = {};
+metrics.actionCounts = {};
+
+// Load other metrics from disk if available, BUT NOT time series data
+// (This won't do anything if we successfully deleted the file above)
 loadMetricsFromDisk()
 
 /**
@@ -408,7 +438,29 @@ function loadMetricsFromDisk() {
       const fileContent = fs.readFileSync(metricsFilePath, 'utf8');
       const savedData = JSON.parse(fileContent);
       
-      // Merge saved data with current metrics
+      // Check if the savedData is from today
+      const savedDate = new Date(savedData.savedAt || '');
+      const today = new Date();
+      const isSameDay = savedDate.getDate() === today.getDate() && 
+                      savedDate.getMonth() === today.getMonth() && 
+                      savedDate.getFullYear() === today.getFullYear();
+      
+      if (!isSameDay) {
+        _logger('WARNING: Saved metrics are from a different day (%s). Using current day only.', 
+                savedDate.toISOString());
+        // If data is from a different day, only restore non-time-sensitive metrics
+        metrics.processCounts = {};
+        metrics.actionCounts = {};
+        metrics.processTiming = {};
+        metrics.actionTiming = {};
+        metrics.ipCounts = {};
+        metrics.referrerCounts = {};
+        metrics.totalRequests = 0;
+        // Note: We've already reset and recreated timeSeriesData with forceResetTimeSeriesData()
+        return;
+      }
+      
+      // Merge saved data with current metrics (except time series data)
       metrics.startTime = savedData.startTime || metrics.startTime;
       metrics.totalRequests = savedData.totalRequests || 0;
       metrics.processCounts = savedData.processCounts || {};
@@ -418,12 +470,9 @@ function loadMetricsFromDisk() {
       metrics.ipCounts = savedData.ipCounts || {};
       metrics.referrerCounts = savedData.referrerCounts || {};
       
-      // Only load time series data if format matches
-      if (Array.isArray(savedData.timeSeriesData) && savedData.timeSeriesData.length === TIME_SERIES_BUCKETS) {
-        metrics.timeSeriesData = savedData.timeSeriesData;
-      }
-      
-      _logger('Loaded metrics from disk: %d total requests restored', metrics.totalRequests);
+      // EXPLICITLY NOT LOADING time series data - we're using the freshly initialized buckets
+      _logger('Loaded general metrics from disk, but using NEW time series data');
+      _logger('Restored %d total historical requests', metrics.totalRequests);
     } else {
       _logger('No saved metrics file found, starting with empty metrics');
     }
