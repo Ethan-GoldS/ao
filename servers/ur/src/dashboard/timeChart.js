@@ -203,7 +203,7 @@ export function getTimeChartScript(rawTimeData) {
         parseInt(timeParts[1])              // minute
       );
       
-      // Removed excessive logging
+      console.log('Start date parsed:', date.toLocaleString());
       return date;
     }
     
@@ -216,7 +216,7 @@ export function getTimeChartScript(rawTimeData) {
       endDatePicker.value = formatDateForInput(now);
       endTimePicker.value = formatTimeForInput(now);
       
-      // Removed excessive logging
+      console.log('End time (now):', now.toLocaleString());
       return now;
     }
     
@@ -243,30 +243,27 @@ export function getTimeChartScript(rawTimeData) {
     
     // Format date label based on interval
     function formatDateLabel(date, interval) {
-      // Format with both date and time for better readability
+      console.log('Formatting date', date, 'with interval', interval);
       if (interval === 'minute') {
-        return date.toLocaleDateString([], {month: 'numeric', day: 'numeric'}) + ' ' + 
-               date.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+        return date.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
       } else if (interval.includes('min')) {
-        return date.toLocaleDateString([], {month: 'numeric', day: 'numeric'}) + ' ' + 
-               date.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+        return date.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
       } else if (interval === 'hour') {
-        return date.toLocaleDateString([], {month: 'numeric', day: 'numeric'}) + ' ' + 
-               date.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+        return date.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
       } else if (interval === 'day') {
-        return date.toLocaleDateString([], {month: 'short', day: 'numeric', year: 'numeric'});
+        return date.toLocaleDateString([], {month: 'short', day: 'numeric'});
       }
       return date.toLocaleString();
     }
     
     // Group data by the selected interval
     function groupDataByInterval(data, interval) {
-      // Removed excessive logging
+      console.log('Grouping data with interval:', interval);
       if (data.length === 0) return [];
       
       // Sort data by timestamp (oldest first)
       const sortedData = [...data].sort((a, b) => a.timestamp - b.timestamp);
-      // Removed excessive logging
+      console.log('Sorted data range:', sortedData[0].timestamp, 'to', sortedData[sortedData.length-1].timestamp);
       
       // Determine grouping time increment in milliseconds
       let increment;
@@ -280,7 +277,7 @@ export function getTimeChartScript(rawTimeData) {
         case 'day': increment = 24 * 60 * 60 * 1000; break;
         default: increment = 10 * 60 * 1000; // Default to 10 minutes
       }
-      // Removed excessive logging
+      console.log('Using increment of', increment, 'milliseconds');
       
       // For very small datasets, we might want to just return the raw data
       // But for consistency, we'll apply grouping in all cases
@@ -293,7 +290,9 @@ export function getTimeChartScript(rawTimeData) {
       const startTime = getStartDateTime();
       const endTime = new Date(); // Current time
       
-      // Removed excessive logging
+      console.log('Selected time range is from', startTime.toLocaleString(), 'to', endTime.toLocaleString());
+      console.log('Data available from', sortedData.length > 0 ? sortedData[0].timestamp.toLocaleString() : 'N/A', 
+                'to', sortedData.length > 0 ? sortedData[sortedData.length-1].timestamp.toLocaleString() : 'N/A');
       
       // Create regular, evenly-spaced buckets for the entire selected time range
       let currentTime = new Date(startTime);
@@ -303,7 +302,7 @@ export function getTimeChartScript(rawTimeData) {
         Math.floor(currentTime.getTime() / increment) * increment
       );
       
-      // Removed excessive logging
+      console.log('Starting buckets from', currentTime.toLocaleString());
       
       // Create a bucket for each interval in the range
       while (currentTime <= endTime) {
@@ -315,7 +314,9 @@ export function getTimeChartScript(rawTimeData) {
         currentTime = new Date(currentTime.getTime() + increment);
       }
       
-      // Removed excessive logging
+      console.log('Created', result.length, 'time buckets spanning from',
+                result[0].timestamp.toLocaleString(), 'to',
+                result[result.length-1].timestamp.toLocaleString());
       
       // Add data points to appropriate buckets
       sortedData.forEach(point => {
@@ -339,7 +340,7 @@ export function getTimeChartScript(rawTimeData) {
         }
       });
       
-      // Removed excessive logging
+      console.log('Created', result.length, 'time buckets');
       
       return result;
     }
