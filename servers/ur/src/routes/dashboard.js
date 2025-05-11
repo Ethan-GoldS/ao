@@ -458,9 +458,10 @@ function generateDashboardHtml() {
       </div>
       
       <script>
-        // Initialize time series chart - reverse the arrays to show most recent data on the right
-        const timeLabels = ${JSON.stringify(timeLabels.reverse())};
-        const timeSeriesData = ${JSON.stringify(timeSeriesData.reverse())};
+        // Initialize time series chart with most recent data on the right (index 0 is oldest, index 23 is newest)
+        // Important: we're keeping the original order of the arrays (oldest first, newest last)
+        const timeLabels = ${JSON.stringify(timeLabels)};
+        const timeSeriesData = ${JSON.stringify(timeSeriesData)};
         
         const timeCtx = document.getElementById('timeSeriesChart').getContext('2d');
         const timeSeriesChart = new Chart(timeCtx, {
@@ -645,9 +646,10 @@ function generateDashboardHtml() {
         // Initialize with full data range
         let currentDisplayHours = 24;
         
-        // Show proper time range initially
-        timeSeriesChart.data.labels = timeLabels.slice(0, currentDisplayHours);
-        timeSeriesChart.data.datasets[0].data = timeSeriesData.slice(0, currentDisplayHours);
+        // Show proper time range initially - all 24 hours
+        // The full dataset is already in the right order (oldest first, newest last)
+        timeSeriesChart.data.labels = timeLabels;
+        timeSeriesChart.data.datasets[0].data = timeSeriesData;
         timeSeriesChart.update();
         
         slider.addEventListener('input', function() {
@@ -655,10 +657,14 @@ function generateDashboardHtml() {
           currentDisplayHours = hours;
           sliderValue.innerText = 'Last ' + hours + (hours == 1 ? ' hour' : ' hours');
           
-          // Always include the most recent hour (index 0) and then add the requested number of hours
-          // Since arrays are already reversed with most recent first (at index 0)
-          timeSeriesChart.data.labels = timeLabels.slice(0, hours);
-          timeSeriesChart.data.datasets[0].data = timeSeriesData.slice(0, hours);
+          // When reducing hours, we want to keep the most recent N hours (remove oldest)
+          // Since our data is ordered from oldest (index 0) to newest (index 23), 
+          // we need to take a slice from the end of the array when reducing hours
+          const startIndex = timeLabels.length - hours; // Calculate where to start (to get the last N hours)
+          
+          // Take the last 'hours' elements from the arrays (newest data)
+          timeSeriesChart.data.labels = timeLabels.slice(startIndex);
+          timeSeriesChart.data.datasets[0].data = timeSeriesData.slice(startIndex);
           timeSeriesChart.update();
         });
         

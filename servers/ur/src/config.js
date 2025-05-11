@@ -41,7 +41,11 @@ const serverConfigSchema = z.object({
   aoUnit: z.enum(['cu', 'mu']),
   strategy: z.enum(['proxy', 'redirect']),
   surUrl: z.string().url(),
-  metricsStoragePath: z.string().optional()
+  metricsStoragePath: z.string().optional(),
+  metricsSaveInterval: z.preprocess((val) => {
+    if (!val) return 60 // Default 60 seconds
+    return typeof val === 'string' ? parseInt(val) : val
+  }, z.number().positive().optional())
 })
 
 /**
@@ -66,7 +70,8 @@ const CONFIG_ENVS = {
     aoUnit: process.env.AO_UNIT || 'cu',
     strategy: process.env.STRATEGY || 'proxy',
     surUrl: process.env.SUR_URL,
-    metricsStoragePath: process.env.METRICS_STORAGE_PATH
+    metricsStoragePath: process.env.METRICS_STORAGE_PATH,
+    metricsSaveInterval: process.env.METRICS_SAVE_INTERVAL
   },
   production: {
     MODE,
@@ -78,7 +83,8 @@ const CONFIG_ENVS = {
     aoUnit: process.env.AO_UNIT,
     strategy: process.env.STRATEGY || 'proxy',
     surUrl: process.env.SUR_URL,
-    metricsStoragePath: process.env.METRICS_STORAGE_PATH
+    metricsStoragePath: process.env.METRICS_STORAGE_PATH,
+    metricsSaveInterval: process.env.METRICS_SAVE_INTERVAL
   }
 }
 

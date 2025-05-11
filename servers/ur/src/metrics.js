@@ -12,7 +12,8 @@ const _logger = logger.child('metrics')
 
 // Storage settings
 const STORAGE_PATH = process.env.METRICS_STORAGE_PATH || null
-const STORAGE_INTERVAL_MS = 60 * 1000 // Save every minute
+// Default save interval is 60 seconds, but can be overridden with env var (in seconds)
+const STORAGE_INTERVAL_MS = (parseInt(process.env.METRICS_SAVE_INTERVAL) || 60) * 1000
 
 // Check if persistent storage is enabled
 const isPersistentStorageEnabled = !!STORAGE_PATH
@@ -281,7 +282,17 @@ setInterval(refreshTimeSeriesData, TIME_BUCKET_SIZE_MS);
 
 // Save metrics to disk periodically if storage is enabled
 if (isPersistentStorageEnabled) {
+  // Save immediately on startup
+  setTimeout(() => {
+    _logger('Performing initial metrics save...');
+    saveMetricsToDisk();
+  }, 5000); // Wait 5 seconds for initial metrics collection
+  
+  // Then set up the regular interval
   setInterval(saveMetricsToDisk, STORAGE_INTERVAL_MS);
+  
+  // Log the save interval for debugging
+  _logger('Metrics will be saved every %d seconds to: %s', STORAGE_INTERVAL_MS / 1000, STORAGE_PATH);
 }
 
 /**
