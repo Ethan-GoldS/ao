@@ -13,43 +13,110 @@ const _logger = logger.child('database')
 // Determine appropriate database path with fallbacks for different environments
 function getDatabasePath() {
   // First try from config
-  let dbPath = config.metricsStoragePath;
-  
-  if (!dbPath) {
-    // Try standard locations with different fallbacks depending on platform
-    if (process.platform === 'win32') {
-      // Windows - use current directory
-      dbPath = './data/metrics.db';
-    } else {
-      // Linux/Unix - try multiple locations with permission checks
-      const possiblePaths = [
-        './data/metrics.db',                // Current directory
-        '/tmp/aorouter-metrics.db',        // System temp directory
-        path.join(process.env.HOME || '.', '.ao-router-metrics.db') // User home directory
-      ];
-      
-      // Find first writable path
-      for (const testPath of possiblePaths) {
-        const testDir = path.dirname(testPath);
-        try {
-          // Check if directory exists and is writable
-          if (fs.existsSync(testDir)) {
-            // Try to write a test file
-            const testFile = path.join(testDir, '.write-test');
-            fs.writeFileSync(testFile, 'test');
-            fs.unlinkSync(testFile); // Remove test file
-            dbPath = testPath;
-            break;
-          } else {
-            // Try to create directory
-            fs.mkdirSync(testDir, { recursive: true });
-            dbPath = testPath;
-            break;
-          }
-        } catch (e) {
-          _logger('Path %s is not writable, trying next option', testDir);
-          // Continue to next option
+  if (config.metricsStoragePath) {
+    const configPath = config.metricsStoragePath;
+    _logger('Config specified database path: %s', configPath);
+    
+    // Check if the path is a directory or includes a filename
+    let dbPath;
+    
+    try {
+      if (fs.existsSync(configPath)) {
+        const stats = fs.statSync(configPath);
+        
+        if (stats.isDirectory()) {
+          // It's a directory, append the default filename
+          dbPath = path.join(configPath, 'metrics.db');
+          _logger('Config path is a directory, using file: %s', dbPath);
+        } else {
+          // It's a file path, use as is
+          dbPath = configPath;
+          _logger('Using specified file path: %s', dbPath);
         }
+        
+        // Verify we can write to this location
+        const testFile = path.join(path.dirname(dbPath), '.write-test');
+        try {
+          fs.writeFileSync(testFile, 'test');
+          fs.unlinkSync(testFile);
+          _logger('Confirmed write access to: %s', path.dirname(dbPath));
+          return dbPath;
+        } catch (err) {
+          _logger('Cannot write to specified path %s: %s', dbPath, err.message);
+        }
+      } else {
+        // Path doesn't exist yet, try to create the directory structure
+        const dirPath = path.dirname(configPath);
+        
+        try {
+          fs.mkdirSync(dirPath, { recursive: true });
+          _logger('Created directory: %s', dirPath);
+          
+          // If it's a directory path (ends with / or \), append filename
+          if (configPath.endsWith('/') || configPath.endsWith('\\')) {
+            dbPath = path.join(configPath, 'metrics.db');
+          } else {
+            dbPath = configPath;
+          }
+          
+          // Test we can write to it
+          const testFile = path.join(dirPath, '.write-test');
+          fs.writeFileSync(testFile, 'test');
+          fs.unlinkSync(testFile);
+          _logger('Confirmed write access to created directory: %s', dirPath);
+          return dbPath;
+        } catch (err) {
+          _logger('Failed to create or write to directory %s: %s', dirPath, err.message);
+        }
+      }
+    } catch (err) {
+      _logger('Error checking config path %s: %s', configPath, err.message);
+    }
+    
+    _logger('WARNING: Could not use specified database path from config, falling back to alternatives');
+  }
+  
+  // If we get here, the config path didn't work, try fallbacks
+  let dbPath;
+  
+  // Try standard locations with different fallbacks depending on platform
+  if (process.platform === 'win32') {
+    // Windows - use current directory
+    dbPath = './data/metrics.db';
+    _logger('Using Windows fallback path: %s', path.resolve(dbPath));
+  } else {
+    // Linux/Unix - try multiple locations with permission checks
+    const possiblePaths = [
+      './data/metrics.db',                // Current directory
+      '/tmp/aorouter-metrics.db',        // System temp directory
+      path.join(process.env.HOME || '.', '.ao-router-metrics.db') // User home directory
+    ];
+    
+    _logger('Trying Unix/Linux fallback paths...');
+    
+    // Find first writable path
+    for (const testPath of possiblePaths) {
+      const testDir = path.dirname(testPath);
+      try {
+        // Check if directory exists and is writable
+        if (fs.existsSync(testDir)) {
+          // Try to write a test file
+          const testFile = path.join(testDir, '.write-test');
+          fs.writeFileSync(testFile, 'test');
+          fs.unlinkSync(testFile); // Remove test file
+          dbPath = testPath;
+          _logger('Using fallback path with confirmed write access: %s', path.resolve(dbPath));
+          break;
+        } else {
+          // Try to create directory
+          fs.mkdirSync(testDir, { recursive: true });
+          dbPath = testPath;
+          _logger('Created directory for fallback path: %s', path.resolve(dbPath));
+          break;
+        }
+      } catch (e) {
+        _logger('Path %s is not writable: %s', testDir, e.message);
+        // Continue to next option
       }
     }
   }

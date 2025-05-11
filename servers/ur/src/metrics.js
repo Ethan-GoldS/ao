@@ -166,8 +166,17 @@ export function getMetrics() {
     });
     
     // Get IP and referrer counts from database
-    const ipCounts = db.getIpCounts();
-    const referrerCounts = db.getReferrerCounts();
+    const ipCountsObj = db.getIpCounts();
+    const referrerCountsObj = db.getReferrerCounts();
+    
+    // Convert to arrays of [key, value] pairs for the dashboard renderer
+    const ipCounts = Object.entries(ipCountsObj)
+      .sort((a, b) => b[1] - a[1]) // Sort by count descending
+      .slice(0, 10); // Take top 10
+      
+    const referrerCounts = Object.entries(referrerCountsObj)
+      .sort((a, b) => b[1] - a[1]) // Sort by count descending
+      .slice(0, 10); // Take top 10
     
     // Get time series data from database
     const timeSeriesData = db.getTimeSeriesData(TIME_SERIES_BUCKETS);
@@ -229,8 +238,8 @@ export function getMetrics() {
       actionCounts: {},
       processTiming: {},
       actionTiming: {},
-      ipCounts: {},
-      referrerCounts: {},
+      ipCounts: [], // Return empty array rather than empty object
+      referrerCounts: [], // Return empty array rather than empty object
       timeSeriesData: [],
       totalRequests: 0,
       startTime
