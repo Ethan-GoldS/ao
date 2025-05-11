@@ -24,20 +24,42 @@ const _logger = logger.child('dashboard');
 export function generateDashboardHtml(metrics) {
   _logger('Generating dashboard HTML with metrics data');
   
+  // Make sure metrics is an object and has required properties
+  metrics = metrics || {};
+  metrics.processCounts = metrics.processCounts || {};
+  metrics.timeSeriesData = metrics.timeSeriesData || [];
+
   // Prepare data for process metrics table
   const allProcessIds = Object.keys(metrics.processCounts);
   const topProcessIds = allProcessIds
-    .sort((a, b) => metrics.processCounts[b] - metrics.processCounts[a])
+    .sort((a, b) => (metrics.processCounts[b] || 0) - (metrics.processCounts[a] || 0))
     .slice(0, 5);
     
   // Add top process IDs to metrics
   metrics.topProcessIds = topProcessIds;
   
+  // Ensure all required metrics properties exist to prevent errors
+  metrics.recentRequests = metrics.recentRequests || [];
+  metrics.requestDetails = metrics.requestDetails || {};
+  metrics.actionCounts = metrics.actionCounts || {};
+  metrics.actionTiming = metrics.actionTiming || {};
+  metrics.processTiming = metrics.processTiming || {};
+  metrics.ipCounts = metrics.ipCounts || {};
+  metrics.referrerCounts = metrics.referrerCounts || {};
+  metrics.totalRequests = metrics.totalRequests || 0;
+  metrics.startTime = metrics.startTime || new Date().toISOString();
+  
   // Get time labels for charts
   metrics.timeLabels = metrics.timeSeriesData.map(bucket => {
+    if (!bucket || !bucket.timestamp) return '00:00';
     const date = new Date(bucket.timestamp);
     return `${date.getHours()}:${String(date.getMinutes()).padStart(2, '0')}`;
   });
+  
+  // Log some debugging info
+  _logger('Dashboard data: %d process IDs, %d time series points', 
+          Object.keys(metrics.processCounts).length,
+          metrics.timeSeriesData.length);
   
   // Generate each section of the dashboard
   const lastUpdated = new Date().toISOString();
