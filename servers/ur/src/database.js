@@ -238,18 +238,23 @@ export function updateTimeSeriesData(processId, timestamp) {
   try {
     if (!timestamp) return
     
-    // Create bucket time string rounded to the hour
+    // Parse the timestamp as UTC
     const requestDate = new Date(timestamp)
-    const bucketDate = new Date(
-      requestDate.getFullYear(),
-      requestDate.getMonth(),
-      requestDate.getDate(),
-      requestDate.getHours(),
+    
+    // Create bucket time string rounded to the hour, ensuring UTC consistency
+    // by using UTC methods throughout
+    const bucketDate = new Date(Date.UTC(
+      requestDate.getUTCFullYear(),
+      requestDate.getUTCMonth(),
+      requestDate.getUTCDate(),
+      requestDate.getUTCHours(),
       0, 0, 0
-    )
+    ))
     
     const bucketTime = bucketDate.toISOString()
     const hour = bucketDate.getUTCHours()
+    
+    _logger('Request time %s mapped to bucket %s', timestamp, bucketTime)
     
     // Get current process counts for this bucket if exists
     const currentBucket = db.prepare('SELECT process_counts FROM time_series WHERE bucket_time = ?').get(bucketTime)
