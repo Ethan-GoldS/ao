@@ -212,7 +212,7 @@ export function finishTracking(tracking, action) {
   
   // Add to recent requests (limit size and keep most recent)
   metrics.recentRequests.unshift({
-    timestamp: new Date().toISOString(),
+    timestamp: new Date(tracking.startTime).toISOString(), // Use the actual request start time
     processId,
     ip,
     action,
