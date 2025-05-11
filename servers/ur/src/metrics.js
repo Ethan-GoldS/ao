@@ -68,11 +68,16 @@ const TIME_BUCKET_SIZE_MS = 60 * 60 * 1000 // 1 hour
 
 // Initialize time series buckets
 function initTimeSeriesBuckets() {
-  const now = Date.now()
+  const now = new Date()
   metrics.timeSeriesData = []
   
+  // Align to the current hour to make buckets clean
+  const alignedNow = new Date(now)
+  alignedNow.setMinutes(0, 0, 0) // Set to the beginning of the current hour
+  
   for (let i = TIME_SERIES_BUCKETS - 1; i >= 0; i--) {
-    const bucketTime = new Date(now - (i * TIME_BUCKET_SIZE_MS))
+    // Create a timestamp at the start of each hour
+    const bucketTime = new Date(alignedNow.getTime() - (i * TIME_BUCKET_SIZE_MS))
     metrics.timeSeriesData.push({
       timestamp: bucketTime.toISOString(),
       hour: bucketTime.getHours(),
@@ -80,6 +85,10 @@ function initTimeSeriesBuckets() {
       processCounts: {}
     })
   }
+  
+  _logger('Initialized time series buckets from %s to %s',
+          metrics.timeSeriesData[0].timestamp,
+          metrics.timeSeriesData[metrics.timeSeriesData.length-1].timestamp)
 }
 
 // Initialize time series data
@@ -137,15 +146,34 @@ function updateTimeSeriesData(processId, timestamp) {
     const requestTime = new Date(timestamp);
     const now = new Date();
     
-    // Find the right time bucket for this request
+    // Calculate how far back this request is from current time
     const timeDiff = now - requestTime;
+    
+    // Skip if the request is older than our tracking window
     if (timeDiff > TIME_SERIES_BUCKETS * TIME_BUCKET_SIZE_MS) {
-      // Request is older than our tracking window
+      _logger('Request too old for time series tracking: %s', timestamp);
       return;
     }
     
-    const bucketIndex = Math.floor(timeDiff / TIME_BUCKET_SIZE_MS);
+    // Find which hourly bucket this belongs to based on the timestamp
+    // We want to find the most recent bucket that isn't newer than the request
+    let bucketIndex = -1;
+    
+    for (let i = 0; i < metrics.timeSeriesData.length; i++) {
+      const bucketTime = new Date(metrics.timeSeriesData[i].timestamp);
+      if (requestTime >= bucketTime) {
+        bucketIndex = i;
+        break;
+      }
+    }
+    
+    // If no matching bucket found, use the oldest bucket
+    if (bucketIndex === -1) {
+      bucketIndex = metrics.timeSeriesData.length - 1;
+    }
+    
     if (bucketIndex < 0 || bucketIndex >= metrics.timeSeriesData.length) {
+      _logger('Unable to find appropriate time bucket for timestamp: %s', timestamp);
       return;
     }
     
@@ -158,6 +186,9 @@ function updateTimeSeriesData(processId, timestamp) {
       bucket.processCounts[processId] = 0;
     }
     bucket.processCounts[processId] += 1;
+    
+    _logger('Added request to time bucket %s (hour %d) with timestamp %s', 
+            bucket.timestamp, bucket.hour, timestamp);
     
   } catch (err) {
     _logger('Error updating time series data: %O', err);
@@ -260,21 +291,45 @@ export function finishTracking(tracking, action) {
  * Refresh time series data by adding a new bucket and removing oldest
  */
 function refreshTimeSeriesData() {
-  const now = Date.now();
-  const newBucketTime = new Date(now);
-  
-  // Remove oldest bucket
-  if (metrics.timeSeriesData.length >= TIME_SERIES_BUCKETS) {
-    metrics.timeSeriesData.shift();
+  try {
+    // Remove oldest bucket
+    if (metrics.timeSeriesData.length >= TIME_SERIES_BUCKETS) {
+      metrics.timeSeriesData.pop();
+    }
+    
+    // Add new bucket for current hour, aligning to the start of the hour
+    const now = new Date();
+    const alignedNow = new Date(now);
+    alignedNow.setMinutes(0, 0, 0); // Set to the beginning of the current hour
+    
+    // Only add a new bucket if we don't already have one for this hour
+    const existingBucketForThisHour = metrics.timeSeriesData.find(bucket => {
+      const bucketDate = new Date(bucket.timestamp);
+      return bucketDate.getHours() === alignedNow.getHours() && 
+             bucketDate.getDate() === alignedNow.getDate() &&
+             bucketDate.getMonth() === alignedNow.getMonth() &&
+             bucketDate.getFullYear() === alignedNow.getFullYear();
+    });
+    
+    if (!existingBucketForThisHour) {
+      metrics.timeSeriesData.unshift({
+        timestamp: alignedNow.toISOString(),
+        hour: alignedNow.getHours(),
+        totalRequests: 0,
+        processCounts: {}
+      });
+      
+      _logger('Added new time bucket for hour %d at %s', 
+              alignedNow.getHours(), alignedNow.toISOString());
+    }
+    
+    _logger('Refreshed time series data - now tracking %d hours from %s to %s', 
+            metrics.timeSeriesData.length,
+            metrics.timeSeriesData[metrics.timeSeriesData.length-1].timestamp,
+            metrics.timeSeriesData[0].timestamp);
+  } catch (err) {
+    _logger('Error refreshing time series data: %O', err);
   }
-  
-  // Add new bucket
-  metrics.timeSeriesData.push({
-    timestamp: newBucketTime.toISOString(),
-    hour: newBucketTime.getHours(),
-    totalRequests: 0,
-    processCounts: {}
-  });
 }
 
 // Refresh time series data every hour
