@@ -1,173 +1,202 @@
 /**
- * Metrics tracking module for UR server
- * Collects data about requests, process IDs, actions, and response times
+ * Metrics collection for the UR server
+ * Tracks request information and performance metrics
  */
 
-// Store metrics in memory
+// Store process metrics
 const metrics = {
-  // Track requests by process ID
-  processCounts: new Map(),
+  // Track total requests by process ID
+  requestsByProcessId: new Map(),
   // Track requests by action type
-  actionCounts: new Map(),
-  // Track timing information by process ID and action
-  timings: new Map(),
-  // Store recent requests for display
+  requestsByAction: new Map(),
+  // Store recent requests with details
   recentRequests: [],
-  maxRecentRequests: 50
+  // Maximum number of recent requests to store
+  maxRecentRequests: 100,
+  // Track timing information by process ID and action
+  timingByProcessIdAndAction: new Map()
 }
 
 /**
- * Extract process ID from request
- * @param {Object} req - Express request object
- * @returns {string|null} Process ID or null if not found
+ * Record the start of a request
+ * @param {string} processId - The process ID
+ * @param {string} clientIp - The client IP address
+ * @param {string} path - The request path
+ * @param {object} requestBody - The request body
+ * @returns {object} The request context with start time
  */
-export function extractProcessId(req) {
-  // Check query parameter first
-  if (req.query && req.query['process-id']) {
-    return req.query['process-id']
-  }
+export function recordRequestStart(processId, clientIp, path, requestBody) {
+  const startTime = Date.now()
   
-  // Check params (for routes like /state/:processId)
-  if (req.params && req.params.processId) {
-    return req.params.processId
-  }
+  // Extract action from Tags if available
+  let action = 'unknown'
+  let tags = {}
   
-  // For POST requests with body, try to extract from body.Target
-  if (req.body && req.body.Target) {
-    return req.body.Target
-  }
-  
-  return null
-}
-
-/**
- * Extract action from request body
- * @param {Object} req - Express request object
- * @returns {string|null} Action name or null if not found
- */
-export function extractAction(req) {
-  if (!req.body || !req.body.Tags || !Array.isArray(req.body.Tags)) {
-    return null
-  }
-  
-  const actionTag = req.body.Tags.find(tag => 
-    tag && tag.name === 'Action' && tag.value
-  )
-  
-  return actionTag ? actionTag.value : null
-}
-
-/**
- * Extract other tag values from request body
- * @param {Object} req - Express request object
- * @returns {Object} Object with tag names as keys and values as values
- */
-export function extractTags(req) {
-  const tags = {}
-  
-  if (!req.body || !req.body.Tags || !Array.isArray(req.body.Tags)) {
-    return tags
-  }
-  
-  req.body.Tags.forEach(tag => {
-    if (tag && tag.name && tag.value) {
-      tags[tag.name] = tag.value
+  try {
+    if (requestBody && requestBody.Tags) {
+      const actionTag = requestBody.Tags.find(tag => tag.name === 'Action')
+      if (actionTag) {
+        action = actionTag.value
+      }
+      
+      // Convert tags to a more usable object
+      requestBody.Tags.forEach(tag => {
+        tags[tag.name] = tag.value
+      })
     }
-  })
-  
-  return tags
-}
-
-/**
- * Record request start time
- * @param {Object} req - Express request object
- */
-export function startTimer(req) {
-  req._requestStartTime = Date.now()
-}
-
-/**
- * Record metrics for a request
- * @param {Object} req - Express request object
- * @param {Object} res - Express response object
- */
-export function recordMetrics(req, res) {
-  const processId = extractProcessId(req)
-  const action = extractAction(req)
-  const clientIp = req.ip || req.headers['x-forwarded-for'] || 'unknown'
-  const responseTime = req._requestStartTime ? Date.now() - req._requestStartTime : null
-  const tags = extractTags(req)
-  const method = req.method
-  const url = req.originalUrl || req.url
-  
-  // Skip if no process ID (though this shouldn't happen for most requests)
-  if (!processId) return
-  
-  // Update process counts
-  metrics.processCounts.set(
-    processId, 
-    (metrics.processCounts.get(processId) || 0) + 1
-  )
-  
-  // Update action counts if action exists
-  if (action) {
-    metrics.actionCounts.set(
-      action,
-      (metrics.actionCounts.get(action) || 0) + 1
-    )
-    
-    // Track timings by process ID and action
-    const key = `${processId}:${action}`
-    if (responseTime) {
-      const existing = metrics.timings.get(key) || { count: 0, total: 0, max: 0, min: Infinity }
-      existing.count += 1
-      existing.total += responseTime
-      existing.max = Math.max(existing.max, responseTime)
-      existing.min = Math.min(existing.min, responseTime)
-      existing.avg = existing.total / existing.count
-      metrics.timings.set(key, existing)
-    }
+  } catch (err) {
+    // Silently fail to avoid breaking the main functionality
+    console.error('Error parsing tags from request body:', err)
   }
   
-  // Add to recent requests
-  const requestInfo = {
-    timestamp: new Date().toISOString(),
+  // Create request context
+  const requestContext = {
     processId,
-    action,
     clientIp,
-    method,
-    url,
-    responseTime,
-    tags
+    path,
+    action,
+    tags,
+    startTime,
+    requestBody: JSON.stringify(requestBody).substring(0, 500) // Limit size
   }
   
-  metrics.recentRequests.unshift(requestInfo)
-  
-  // Keep only the most recent requests
-  if (metrics.recentRequests.length > metrics.maxRecentRequests) {
-    metrics.recentRequests = metrics.recentRequests.slice(0, metrics.maxRecentRequests)
-  }
+  return requestContext
 }
 
 /**
- * Get all collected metrics
- * @returns {Object} All metrics data
+ * Record the completion of a request
+ * @param {object} requestContext - The request context from recordRequestStart
+ */
+export function recordRequestComplete(requestContext) {
+  if (!requestContext) return
+  
+  const endTime = Date.now()
+  const duration = endTime - requestContext.startTime
+  
+  // Update request with completion time
+  requestContext.endTime = endTime
+  requestContext.duration = duration
+  requestContext.timestamp = new Date().toISOString()
+  
+  // Store in recent requests, maintaining max size
+  metrics.recentRequests.unshift(requestContext)
+  if (metrics.recentRequests.length > metrics.maxRecentRequests) {
+    metrics.recentRequests.pop()
+  }
+  
+  // Update process ID metrics
+  if (!metrics.requestsByProcessId.has(requestContext.processId)) {
+    metrics.requestsByProcessId.set(requestContext.processId, {
+      count: 0,
+      totalDuration: 0,
+      actions: new Map()
+    })
+  }
+  
+  const processMetrics = metrics.requestsByProcessId.get(requestContext.processId)
+  processMetrics.count++
+  processMetrics.totalDuration += duration
+  
+  // Update action metrics for this process
+  if (!processMetrics.actions.has(requestContext.action)) {
+    processMetrics.actions.set(requestContext.action, {
+      count: 0,
+      totalDuration: 0
+    })
+  }
+  const actionMetrics = processMetrics.actions.get(requestContext.action)
+  actionMetrics.count++
+  actionMetrics.totalDuration += duration
+  
+  // Update global action metrics
+  if (!metrics.requestsByAction.has(requestContext.action)) {
+    metrics.requestsByAction.set(requestContext.action, {
+      count: 0,
+      totalDuration: 0,
+      processCounts: new Map()
+    })
+  }
+  
+  const globalActionMetrics = metrics.requestsByAction.get(requestContext.action)
+  globalActionMetrics.count++
+  globalActionMetrics.totalDuration += duration
+  
+  // Update process counts for this action
+  if (!globalActionMetrics.processCounts.has(requestContext.processId)) {
+    globalActionMetrics.processCounts.set(requestContext.processId, 0)
+  }
+  globalActionMetrics.processCounts.set(
+    requestContext.processId,
+    globalActionMetrics.processCounts.get(requestContext.processId) + 1
+  )
+  
+  // Track timing by process ID and action combined
+  const timingKey = `${requestContext.processId}:${requestContext.action}`
+  if (!metrics.timingByProcessIdAndAction.has(timingKey)) {
+    metrics.timingByProcessIdAndAction.set(timingKey, {
+      count: 0,
+      totalDuration: 0,
+      minDuration: Number.MAX_SAFE_INTEGER,
+      maxDuration: 0
+    })
+  }
+  
+  const timingMetrics = metrics.timingByProcessIdAndAction.get(timingKey)
+  timingMetrics.count++
+  timingMetrics.totalDuration += duration
+  timingMetrics.minDuration = Math.min(timingMetrics.minDuration, duration)
+  timingMetrics.maxDuration = Math.max(timingMetrics.maxDuration, duration)
+}
+
+/**
+ * Get a snapshot of all metrics
+ * @returns {object} The current metrics
  */
 export function getMetrics() {
-  return {
-    processCounts: Object.fromEntries(metrics.processCounts),
-    actionCounts: Object.fromEntries(metrics.actionCounts),
-    timings: Object.fromEntries(metrics.timings),
-    recentRequests: metrics.recentRequests
+  // Convert Maps to serializable objects
+  const serialized = {
+    recentRequests: metrics.recentRequests,
+    
+    requestsByProcessId: Array.from(metrics.requestsByProcessId.entries()).map(([processId, data]) => ({
+      processId,
+      count: data.count,
+      avgDuration: data.count > 0 ? data.totalDuration / data.count : 0,
+      actions: Array.from(data.actions.entries()).map(([action, actionData]) => ({
+        action,
+        count: actionData.count,
+        avgDuration: actionData.count > 0 ? actionData.totalDuration / actionData.count : 0
+      }))
+    })),
+    
+    requestsByAction: Array.from(metrics.requestsByAction.entries()).map(([action, data]) => ({
+      action,
+      count: data.count,
+      avgDuration: data.count > 0 ? data.totalDuration / data.count : 0,
+      topProcesses: Array.from(data.processCounts.entries())
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 10)
+        .map(([processId, count]) => ({ processId, count }))
+    })),
+    
+    timingByProcessIdAndAction: Array.from(metrics.timingByProcessIdAndAction.entries()).map(([key, data]) => {
+      const [processId, action] = key.split(':')
+      return {
+        processId,
+        action,
+        count: data.count,
+        avgDuration: data.count > 0 ? data.totalDuration / data.count : 0,
+        minDuration: data.minDuration === Number.MAX_SAFE_INTEGER ? 0 : data.minDuration,
+        maxDuration: data.maxDuration
+      }
+    }).sort((a, b) => b.avgDuration - a.avgDuration) // Sort by slowest first
   }
+  
+  return serialized
 }
 
-/**
- * Reset all metrics
- */
-export function resetMetrics() {
-  metrics.processCounts.clear()
-  metrics.actionCounts.clear()
-  metrics.timings.clear()
-  metrics.recentRequests = []
+// Export the metrics module
+export default {
+  recordRequestStart,
+  recordRequestComplete,
+  getMetrics
 }

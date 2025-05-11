@@ -13,6 +13,7 @@ import { determineHostWith, bailoutWith } from './domain.js'
 import { logger } from './logger.js'
 
 import { mountRoutesWithByAoUnit } from './routes/byAoUnit.js'
+import { recordRequestStart, recordRequestComplete } from './metrics.js'
 
 export function proxyWith ({ aoUnit, hosts, surUrl, processToHost, ownerToHost }) {
   const _logger = logger.child('proxy')
@@ -74,6 +75,22 @@ export function proxyWith ({ aoUnit, hosts, surUrl, processToHost, ownerToHost }
 
         if (!processId) return res.status(404).send({ error: 'Process id not found on request' })
 
+        // Extract request body for metrics if available
+        let requestBody = null
+        if (req.body) {
+          requestBody = typeof req.body === 'string' ? JSON.parse(req.body) : req.body
+        } else if (req.rawBody) {
+          try {
+            requestBody = JSON.parse(req.rawBody.toString())
+          } catch (e) {
+            // Silently fail parsing - don't break the proxy
+          }
+        }
+        
+        // Record request metrics
+        const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress
+        const metricsContext = recordRequestStart(processId, clientIp, req.path, requestBody)
+
         async function revProxy ({ failoverAttempt, err }) {
           /**
            * In cases where we have to consume the request stream before proxying
@@ -125,7 +142,15 @@ export function proxyWith ({ aoUnit, hosts, surUrl, processToHost, ownerToHost }
          * By using a trampoline, we sideskirt any issues with our tailcall recursion overflowing
          * the callstack, no matter how many underlying hosts exist
          */
-        return trampoline(() => revProxy({ failoverAttempt: 0 }))
+        try {
+          const result = await trampoline(() => revProxy({ failoverAttempt: 0 }))
+          return result
+        } finally {
+          // Record metrics completion regardless of success/failure
+          if (metricsContext) {
+            recordRequestComplete(metricsContext)
+          }
+        }
       })
     )()
   }

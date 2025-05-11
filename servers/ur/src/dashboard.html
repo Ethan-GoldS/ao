@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>UR Metrics Dashboard</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      line-height: 1.6;
+      color: #333;
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 20px;
+      background-color: #f5f5f5;
+    }
+    h1, h2, h3 {
+      margin-top: 1.5em;
+      margin-bottom: 0.5em;
+      color: #2c3e50;
+    }
+    .card {
+      background: white;
+      border-radius: 8px;
+      box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+      padding: 20px;
+      margin-bottom: 20px;
+    }
+    .metrics-container {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(400px, 1fr));
+      gap: 20px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 15px 0;
+      font-size: 14px;
+    }
+    th, td {
+      padding: 12px 15px;
+      border-bottom: 1px solid #ddd;
+      text-align: left;
+    }
+    th {
+      background-color: #f8f9fa;
+      color: #2c3e50;
+      font-weight: 600;
+    }
+    tr:hover {
+      background-color: #f1f1f1;
+    }
+    .reload {
+      background: #4CAF50;
+      color: white;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 14px;
+      margin-bottom: 20px;
+    }
+    .reload:hover {
+      background: #45a049;
+    }
+    .process-id {
+      font-family: monospace;
+      font-size: 12px;
+      word-break: break-all;
+    }
+    .duration {
+      font-weight: bold;
+    }
+    .duration-high {
+      color: #e74c3c;
+    }
+    .duration-medium {
+      color: #f39c12;
+    }
+    .duration-low {
+      color: #27ae60;
+    }
+    .tags-container {
+      max-height: 100px;
+      overflow-y: auto;
+      font-size: 12px;
+      background-color: #f8f9fa;
+      padding: 8px;
+      border-radius: 4px;
+    }
+  </style>
+</head>
+<body>
+  <h1>UR Metrics Dashboard</h1>
+  <button class="reload" onclick="fetchData()">Refresh Data</button>
+  
+  <div class="card">
+    <h2>Recent Requests</h2>
+    <div id="recent-requests">Loading...</div>
+  </div>
+  
+  <div class="metrics-container">
+    <div class="card">
+      <h2>Top Process IDs</h2>
+      <div id="top-processes">Loading...</div>
+    </div>
+    
+    <div class="card">
+      <h2>Top Actions</h2>
+      <div id="top-actions">Loading...</div>
+    </div>
+  </div>
+  
+  <div class="card">
+    <h2>Slowest Requests (Process ID + Action)</h2>
+    <div id="slowest-requests">Loading...</div>
+  </div>
+
+  <script>
+    // Format duration in ms to a readable format
+    function formatDuration(ms) {
+      if (ms < 1000) return `${ms}ms`;
+      return `${(ms / 1000).toFixed(2)}s`;
+    }
+    
+    // Format timestamp to local time
+    function formatTimestamp(timestamp) {
+      return new Date(timestamp).toLocaleString();
+    }
+    
+    // Add color class based on duration
+    function getDurationClass(ms) {
+      if (ms > 1000) return "duration-high";
+      if (ms > 500) return "duration-medium";
+      return "duration-low";
+    }
+    
+    // Render recent requests
+    function renderRecentRequests(data) {
+      const container = document.getElementById('recent-requests');
+      if (!data.recentRequests.length) {
+        container.innerHTML = '<p>No requests recorded yet.</p>';
+        return;
+      }
+      
+      let html = `
+        <table>
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Process ID</th>
+              <th>Action</th>
+              <th>Client IP</th>
+              <th>Duration</th>
+              <th>Path</th>
+              <th>Tags</th>
+            </tr>
+          </thead>
+          <tbody>
+      `;
+      
+      data.recentRequests.forEach(req => {
+        html += `
+          <tr>
+            <td>${formatTimestamp(req.timestamp)}</td>
+            <td class="process-id">${req.processId}</td>
+            <td>${req.action}</td>
+            <td>${req.clientIp}</td>
+            <td class="duration ${getDurationClass(req.duration)}">${formatDuration(req.duration)}</td>
+            <td>${req.path}</td>
+            <td>
+              <div class="tags-container">
+                ${JSON.stringify(req.tags, null, 2)}
+              </div>
+            </td>
+          </tr>
+        `;
+      });
+      
+      html += '</tbody></table>';
+      container.innerHTML = html;
+    }
+    
+    // Render top processes
+    function renderTopProcesses(data) {
+      const container = document.getElementById('top-processes');
+      if (!data.requestsByProcessId.length) {
+        container.innerHTML = '<p>No process data recorded yet.</p>';
+        return;
+      }
+      
+      // Sort by count
+      const sorted = [...data.requestsByProcessId].sort((a, b) => b.count - a.count);
+      
+      let html = `
+        <table>
+          <thead>
+            <tr>
+              <th>Process ID</th>
+              <th>Count</th>
+              <th>Avg Duration</th>
+              <th>Top Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+      `;
+      
+      sorted.forEach(proc => {
+        const topActions = proc.actions
+          .sort((a, b) => b.count - a.count)
+          .slice(0, 3)
+          .map(a => `${a.action} (${a.count})`)
+          .join(', ');
+          
+        html += `
+          <tr>
+            <td class="process-id">${proc.processId}</td>
+            <td>${proc.count}</td>
+            <td class="duration ${getDurationClass(proc.avgDuration)}">${formatDuration(proc.avgDuration)}</td>
+            <td>${topActions}</td>
+          </tr>
+        `;
+      });
+      
+      html += '</tbody></table>';
+      container.innerHTML = html;
+    }
+    
+    // Render top actions
+    function renderTopActions(data) {
+      const container = document.getElementById('top-actions');
+      if (!data.requestsByAction.length) {
+        container.innerHTML = '<p>No action data recorded yet.</p>';
+        return;
+      }
+      
+      // Sort by count
+      const sorted = [...data.requestsByAction].sort((a, b) => b.count - a.count);
+      
+      let html = `
+        <table>
+          <thead>
+            <tr>
+              <th>Action</th>
+              <th>Count</th>
+              <th>Avg Duration</th>
+              <th>Top Process IDs</th>
+            </tr>
+          </thead>
+          <tbody>
+      `;
+      
+      sorted.forEach(action => {
+        const topProcesses = action.topProcesses
+          .slice(0, 2)
+          .map(p => `<span class="process-id">${p.processId}</span> (${p.count})`)
+          .join('<br>');
+          
+        html += `
+          <tr>
+            <td>${action.action}</td>
+            <td>${action.count}</td>
+            <td class="duration ${getDurationClass(action.avgDuration)}">${formatDuration(action.avgDuration)}</td>
+            <td>${topProcesses}</td>
+          </tr>
+        `;
+      });
+      
+      html += '</tbody></table>';
+      container.innerHTML = html;
+    }
+    
+    // Render slowest requests
+    function renderSlowestRequests(data) {
+      const container = document.getElementById('slowest-requests');
+      if (!data.timingByProcessIdAndAction.length) {
+        container.innerHTML = '<p>No timing data recorded yet.</p>';
+        return;
+      }
+      
+      // Already sorted by avgDuration in the API
+      let html = `
+        <table>
+          <thead>
+            <tr>
+              <th>Process ID</th>
+              <th>Action</th>
+              <th>Avg Duration</th>
+              <th>Min Duration</th>
+              <th>Max Duration</th>
+              <th>Count</th>
+            </tr>
+          </thead>
+          <tbody>
+      `;
+      
+      data.timingByProcessIdAndAction.forEach(item => {
+        html += `
+          <tr>
+            <td class="process-id">${item.processId}</td>
+            <td>${item.action}</td>
+            <td class="duration ${getDurationClass(item.avgDuration)}">${formatDuration(item.avgDuration)}</td>
+            <td>${formatDuration(item.minDuration)}</td>
+            <td>${formatDuration(item.maxDuration)}</td>
+            <td>${item.count}</td>
+          </tr>
+        `;
+      });
+      
+      html += '</tbody></table>';
+      container.innerHTML = html;
+    }
+    
+    // Fetch and render all data
+    function fetchData() {
+      fetch('/metrics')
+        .then(response => response.json())
+        .then(data => {
+          renderRecentRequests(data);
+          renderTopProcesses(data);
+          renderTopActions(data);
+          renderSlowestRequests(data);
+        })
+        .catch(error => {
+          console.error('Error fetching metrics:', error);
+          document.getElementById('recent-requests').innerHTML = 
+            `<p>Error fetching metrics: ${error.message}</p>`;
+        });
+    }
+    
+    // Initial data load
+    fetchData();
+    
+    // Refresh every 10 seconds
+    setInterval(fetchData, 10000);
+  </script>
+</body>
+</html>
