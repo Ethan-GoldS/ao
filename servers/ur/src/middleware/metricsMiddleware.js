@@ -31,15 +31,49 @@ function getClientIp(req) {
 /**
  * Create middleware to collect metrics for all requests
  */
+// Cache of already tracked requests to prevent duplicates
+const trackedRequests = new Map();
+
+// Cleanup old entries from the tracked requests map
+setInterval(() => {
+  const now = Date.now();
+  trackedRequests.forEach((timestamp, key) => {
+    // Remove entries older than 30 seconds
+    if (now - timestamp > 30000) {
+      trackedRequests.delete(key);
+    }
+  });
+}, 60000); // Run cleanup every minute
+
 export function metricsMiddleware() {
   return (req, res, next) => {
     // Skip tracking for dashboard requests to avoid recursion
     if (req.path === '/dashboard' || req.path.startsWith('/new-dashboard')) {
       return next()
     }
-
+    
     // Get process ID from query params
     const processId = req.query['process-id'] || null;
+    
+    // Create a unique request identifier
+    const requestId = `${processId}-${req.method}-${req.path}-${Date.now()}`;
+    
+    // PREVENT DUPLICATE TRACKING: Check if we've already seen this exact request recently
+    if (processId) {
+      // For requests to the same process in quick succession, we need more granular tracking
+      // Use a short window (1 second) to detect and prevent duplicates
+      const recentKey = `${processId}-${req.method}-${req.path}`;
+      const lastTracked = trackedRequests.get(recentKey);
+      
+      if (lastTracked && (Date.now() - lastTracked < 1000)) {
+        // This appears to be a duplicate request (same process, method, path within 1 second)
+        _logger('Skipping duplicate metrics tracking for %s (already tracked %dms ago)', processId, Date.now() - lastTracked);
+        return next();
+      }
+      
+      // Mark this request as tracked
+      trackedRequests.set(recentKey, Date.now());
+    }
     
     // Get proper client IP
     const clientIp = getClientIp(req);
