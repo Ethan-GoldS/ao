@@ -99,6 +99,8 @@ export async function initDatabase() {
       console.error('POSTGRES ERROR: Unexpected database pool error:', err)
     })
 
+    // Pool is now initialized
+
     // Test connection to metrics database
     const client = await pool.connect()
     _logger('POSTGRES: Successfully acquired connection to metrics database')
@@ -721,6 +723,15 @@ export async function getActionTiming() {
     _logger('Error getting action timing: %O', err)
     return {}
   }
+}
+
+/**
+ * Get the database pool for direct use
+ * Used for test data generation and debugging
+ * @returns {Object} Database pool or null if not connected
+ */
+export function getDbPool() {
+  return pool;
 }
 
 /**

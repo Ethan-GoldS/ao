@@ -5,6 +5,7 @@ import express from 'express';
 import { logger } from '../logger.js';
 import { generateDashboardHtml } from '../dashboard/index.js';
 import { getMetrics } from '../metrics.js';
+import * as db from '../database.js';
 
 const router = express.Router();
 const _logger = logger.child('dashboard');
@@ -30,44 +31,63 @@ export function mountDashboard(app) {
   });
   
   // JSON data endpoint for AJAX refreshing
-  app.get('/dashboard/data', (req, res) => {
+  app.get('/dashboard/data', async (req, res) => {
     try {
       const metrics = getMetrics();
       
-      // Prepare a simplified data object with just what the UI needs
-      // Normalize time series data to ensure it's in the right format for the UI
+      // Get the freshest time series data directly from the database
+      // This ensures we're always displaying the latest data even if
+      // in-memory metrics haven't been fully updated
       let timeSeriesData = [];
       
-      if (metrics.timeSeriesData && metrics.timeSeriesData.length > 0) {
-        timeSeriesData = metrics.timeSeriesData.map(item => {
-          // Make sure we have the right format for time series data
-          let processCounts = item.processCounts;
-          
-          // Handle PostgreSQL JSONB that may be returned as a string
-          if (typeof processCounts === 'string') {
-            try {
-              processCounts = JSON.parse(processCounts);
-            } catch (e) {
-              processCounts = {};
+      try {
+        // Get 48 hours of time series data
+        const dbTimeSeriesData = await db.getTimeSeriesData(48);
+        _logger('Fetched %d time series data points directly from database', dbTimeSeriesData.length);
+        
+        if (dbTimeSeriesData && dbTimeSeriesData.length > 0) {
+          timeSeriesData = dbTimeSeriesData.map(item => {
+            // Normalize the data format for the UI
+            let processCounts = item.processCounts;
+            
+            // Handle PostgreSQL JSONB that may be returned as a string
+            if (typeof processCounts === 'string') {
+              try {
+                processCounts = JSON.parse(processCounts);
+              } catch (e) {
+                processCounts = {};
+              }
             }
-          }
+            
+            // Ensure we have a valid date object for consistent sorting
+            const timestamp = item.timestamp ? new Date(item.timestamp) : new Date();
+            
+            return {
+              timestamp: timestamp.toISOString(),
+              // Use camelCase property names for consistency
+              totalRequests: parseInt(item.totalRequests || item.total_requests || 0, 10),
+              // Make sure process counts is an object
+              processCounts: processCounts || {},
+              // Add a properly formatted hour field
+              hour: item.hour || timestamp.getUTCHours()
+            };
+          });
           
-          return {
-            // Ensure we have a proper timestamp
-            timestamp: item.timestamp,
-            // Use camelCase property names for consistency
-            totalRequests: item.totalRequests || item.total_requests || 0,
-            // Make sure process counts is an object
-            processCounts: processCounts || {},
-            // Add a properly formatted hour field
-            hour: item.hour || new Date(item.timestamp).getUTCHours()
-          };
-        });
+          // Sort from oldest to newest for proper charting
+          timeSeriesData.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+        }
+      } catch (dbErr) {
+        _logger('Error fetching time series data from database: %O', dbErr);
+        // Fall back to in-memory data if DB query fails
+        timeSeriesData = metrics.timeSeriesData || [];
       }
       
-      // Log the first time series data point for debugging
+      // Log the time series data for debugging
       if (timeSeriesData.length > 0) {
-        _logger('Time series data sample: %O', timeSeriesData[0]);
+        _logger('Time series data available: %d points from %s to %s', 
+                timeSeriesData.length,
+                new Date(timeSeriesData[0].timestamp).toLocaleString(),
+                new Date(timeSeriesData[timeSeriesData.length-1].timestamp).toLocaleString());
       } else {
         _logger('No time series data available');
       }

@@ -139,25 +139,54 @@ router.get('/time-series', async (req, res) => {
  */
 router.post('/generate-test-data', async (req, res) => {
   try {
-    // Get the current metrics
-    const currentMetrics = metrics.getMetrics();
-    
     // Create fake time series data for the last 24 hours
     const now = new Date();
     let createdCount = 0;
     
+    // Get the database pool directly from database.js if it exists
+    const pool = await db.getDbPool();
+    if (!pool) {
+      return res.status(500).json({ 
+        error: 'Database not connected', 
+        message: 'Make sure PostgreSQL is enabled and configured correctly' 
+      });
+    }
+    
+    // Create data for the last 24 hours
     for (let i = 0; i < 24; i++) {
-      const pointTime = new Date(now.getTime() - (i * 3600 * 1000)); // Go back i hours
-      const fakeRequests = Math.floor(Math.random() * 100) + 5; // Random number 5-104
-      
-      // Use the updateTimeSeriesData function to create a time bucket
-      const success = await db.updateTimeSeriesData(
-        pointTime,
-        '8N08BvmC34q9Hxj-YS6eAOd_cSmYqGpezPPHUYWJBhg', // Use a real process ID from logs
-        25 // Fake duration
-      );
-      
-      if (success) createdCount++;
+      try {
+        const pointTime = new Date(now.getTime() - (i * 3600 * 1000)); // Go back i hours
+        const requestCount = Math.floor(Math.random() * 100) + 5; // Random number 5-104
+        
+        // Insert directly into the time series table
+        const result = await pool.query(`
+          INSERT INTO ur_metrics_time_series(
+            timestamp, 
+            hour, 
+            total_requests, 
+            process_counts
+          )
+          VALUES(
+            $1, 
+            $2, 
+            $3, 
+            $4
+          )
+          ON CONFLICT (timestamp) DO UPDATE SET
+            total_requests = $3,
+            process_counts = $4
+        `, [
+          pointTime,
+          pointTime.getUTCHours(),
+          requestCount,
+          JSON.stringify({"8N08BvmC34q9Hxj-YS6eAOd_cSmYqGpezPPHUYWJBhg": Math.floor(Math.random() * requestCount) + 1})
+        ]);
+        
+        _logger(`Created test time series data for ${pointTime.toISOString()}`);
+        createdCount++;
+      } catch (err) {
+        _logger(`Error creating test point for hour -${i}: ${err.message}`);
+      }
     }
     
     res.json({
