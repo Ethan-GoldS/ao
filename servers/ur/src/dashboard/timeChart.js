@@ -21,6 +21,7 @@ export function initializeTimeControls(timeSeriesData) {
   }
   
   function formatTimeForInput(date) {
+    // Format time as HH:MM
     return date.toTimeString().substring(0, 5);
   }
 
@@ -121,6 +122,14 @@ export function getTimeChartScript(rawTimeData) {
     
     // Create the initial chart
     function initializeTimeChart() {
+      // Get the current time for end time
+      const now = new Date();
+      // Set end time to now if not already set
+      if (!endDatePicker.value) {
+        endDatePicker.value = formatDateForInput(now);
+        endTimePicker.value = formatTimeForInput(now);
+      }
+      
       // Get date range from pickers
       const startDate = getStartDateTime();
       const endDate = getEndDateTime();
@@ -131,10 +140,10 @@ export function getTimeChartScript(rawTimeData) {
       // Group data by selected interval
       const groupedData = groupDataByInterval(filteredData, intervalSelector.value);
       
-      // IMPORTANT: Reverse the data to show oldest on left, newest on right
-      groupedData.reverse();
+      // Sort data chronologically (oldest to newest)
+      groupedData.sort((a, b) => a.timestamp - b.timestamp);
       
-      // Extract labels and values
+      // Extract labels and values (oldest on left, newest on right)
       const labels = groupedData.map(point => formatDateLabel(point.timestamp, intervalSelector.value));
       const values = groupedData.map(point => point.requests);
       
@@ -286,6 +295,11 @@ export function getTimeChartScript(rawTimeData) {
     
     // Update the chart with new time range and interval
     function updateTimeChart() {
+      // Always use the current time for the end time
+      const now = new Date();
+      endDatePicker.value = formatDateForInput(now);
+      endTimePicker.value = formatTimeForInput(now);
+      
       // Get date range
       const startDate = getStartDateTime();
       const endDate = getEndDateTime();
@@ -294,10 +308,10 @@ export function getTimeChartScript(rawTimeData) {
       const filteredData = filterDataByTimeRange(startDate, endDate);
       const groupedData = groupDataByInterval(filteredData, intervalSelector.value);
       
-      // IMPORTANT: Reverse the data to show oldest on left, newest on right
-      groupedData.reverse();
+      // Sort data chronologically (oldest to newest)
+      groupedData.sort((a, b) => a.timestamp - b.timestamp);
       
-      // Update chart data
+      // Update chart data (oldest on left, newest on right)
       const labels = groupedData.map(point => formatDateLabel(point.timestamp, intervalSelector.value));
       const values = groupedData.map(point => point.requests);
       
@@ -324,28 +338,39 @@ export function getTimeChartScript(rawTimeData) {
         this.classList.add('active');
         
         const value = this.dataset.value;
+        // Always use the most current time for end time
         const now = new Date();
-        let startDate = new Date(now);
+        let startDate;
         
         // Correctly set the time range based on preset value (going back from now)
-        if (value === '1h') {
-          // Go back 1 hour from current time
-          startDate = new Date(now.getTime() - (1 * 60 * 60 * 1000));
-        } else if (value === '6h') {
-          // Go back 6 hours from current time
-          startDate = new Date(now.getTime() - (6 * 60 * 60 * 1000));
-        } else if (value === '12h') {
-          // Go back 12 hours from current time
-          startDate = new Date(now.getTime() - (12 * 60 * 60 * 1000));
-        } else if (value === '24h') {
-          // Go back 24 hours from current time
-          startDate = new Date(now.getTime() - (24 * 60 * 60 * 1000));
-        } else if (value === '7d') {
-          // Go back 7 days from current time
-          startDate = new Date(now.getTime() - (7 * 24 * 60 * 60 * 1000));
+        switch(value) {
+          case '1h':
+            // Go back 1 hour from current time
+            startDate = new Date(now.getTime() - (1 * 60 * 60 * 1000));
+            break;
+          case '6h':
+            // Go back 6 hours from current time
+            startDate = new Date(now.getTime() - (6 * 60 * 60 * 1000));
+            break;
+          case '12h':
+            // Go back 12 hours from current time
+            startDate = new Date(now.getTime() - (12 * 60 * 60 * 1000));
+            break;
+          case '24h':
+            // Go back 24 hours from current time
+            startDate = new Date(now.getTime() - (24 * 60 * 60 * 1000));
+            break;
+          case '7d':
+            // Go back 7 days from current time
+            startDate = new Date(now.getTime() - (7 * 24 * 60 * 60 * 1000));
+            break;
+          default:
+            // Default to 6 hours ago if something goes wrong
+            startDate = new Date(now.getTime() - (6 * 60 * 60 * 1000));
+            break;
         }
         
-        // Update date/time pickers
+        // Update date/time pickers - end time is ALWAYS now
         startDatePicker.value = formatDateForInput(startDate);
         startTimePicker.value = formatTimeForInput(startDate);
         endDatePicker.value = formatDateForInput(now);
