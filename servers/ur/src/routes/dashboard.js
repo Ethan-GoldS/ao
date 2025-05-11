@@ -45,23 +45,4 @@ export function setupDashboardRoutes(metricsService) {
   return router;
 }
 
-/**
- * Mount dashboard route on app
- */
-export function mountDashboard(app) {
-  _logger('Mounting dashboard route')
-  
-  app.get('/dashboard', (req, res) => {
-    try {
-      const metrics = getMetrics();
-      const html = generateDashboardHtml(metrics)
-      res.setHeader('Content-Type', 'text/html')
-      res.send(html)
-    } catch (err) {
-      _logger('Error rendering dashboard: %O', err)
-      res.status(500).send('Error rendering dashboard')
-    }
-  })
-  
-  return app
-}
+
