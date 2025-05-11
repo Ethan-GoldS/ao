@@ -1,7 +1,6 @@
 import cors from 'cors'
 import express from 'express'
 import { pipe } from 'ramda'
-import getRawBody from 'raw-body'
 
 import { config } from './config.js'
 import { logger } from './logger.js'

@@ -84,18 +84,42 @@ export function generateRecentRequestsTable(recentRequests, requestDetails) {
       try {
         const rawData = req.request_raw || req.rawBody;
         let parsedRaw = rawData;
+        let isRequestBodyCaptured = false;
         
         // Try to parse the raw data if it's a string
         if (typeof rawData === 'string' && rawData.trim().startsWith('{')) {
           try {
             parsedRaw = JSON.parse(rawData);
+            
+            // Look specifically for body data in the parsed raw
+            if (parsedRaw.body) {
+              isRequestBodyCaptured = true;
+            }
           } catch (e) {
             // Keep as string if parsing fails
             parsedRaw = rawData;
           }
         }
         
-        rawRequestHtml = formatJsonForDisplay(parsedRaw);
+        // If we have a parsed body, display it more prominently
+        if (isRequestBodyCaptured) {
+          rawRequestHtml = `
+            <div class="request-metadata">
+              <h5>Request Headers & Metadata</h5>
+              ${formatJsonForDisplay({ 
+                headers: parsedRaw.headers || {}, 
+                method: parsedRaw.method, 
+                url: parsedRaw.url,
+                query: parsedRaw.query
+              })}
+              <h5 class="request-body-header">Request Body Data</h5>
+              ${formatJsonForDisplay(parsedRaw.body)}
+            </div>
+          `;
+        } else {
+          // Otherwise just show what we have
+          rawRequestHtml = formatJsonForDisplay(parsedRaw);
+        }
       } catch (err) {
         rawRequestHtml = `<pre>${(req.request_raw || req.rawBody || '').substr(0, 1000)}</pre>`;
       }
