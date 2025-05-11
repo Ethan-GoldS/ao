@@ -96,7 +96,7 @@ if (usePostgres) {
 }
 
 // Store metrics in memory (will reset on server restart or will be populated from storage)
-const metrics = {
+export const metrics = {
   // Track recent requests with timestamp, process ID, IP, action, duration
   recentRequests: [],
   // Track detailed request info including headers and payload summaries
@@ -408,6 +408,14 @@ export async function finishTracking(tracking, action) {
     // Store in memory
     storeMetricsInMemory(requestData, duration);
   }
+}
+
+/**
+ * Get metrics object for dashboard and API
+ * @returns {Object} Metrics object
+ */
+export function getMetrics() {
+  return metrics;
 }
 
 /**

@@ -2,7 +2,7 @@
  * Metrics middleware
  * Collects metrics for all requests without affecting the proxy functionality
  */
-import { metrics, processRequest } from '../metrics.js'
+import { finishTracking, recordRequestDetails, extractAction } from '../metrics.js'
 import { logger } from '../logger.js'
 
 const _logger = logger.child('metrics-middleware')
