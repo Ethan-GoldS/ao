@@ -1273,57 +1273,7 @@ export function isConnected() {
   return !!pool
 }
 
-/**
- * Get total requests and server start time
- * @returns {Promise<Object>} Server info
- */
-export async function getServerInfo() {
-  if (!pool) {
-    return {
-      startTime: new Date().toISOString(),
-      totalRequests: 0,
-      lastUpdated: new Date().toISOString()
-    };
-  }
-  
-  try {
-    // Try to get server info from database
-    const result = await pool.query(`
-      SELECT start_time, total_requests, last_updated
-      FROM ur_metrics_server_info
-      WHERE id = 1
-    `);
-    
-    if (result.rows.length > 0) {
-      return {
-        startTime: result.rows[0].start_time,
-        totalRequests: parseInt(result.rows[0].total_requests || 0, 10),
-        lastUpdated: result.rows[0].last_updated
-      };
-    }
-    
-    // If no server info exists yet, create it
-    const now = new Date();
-    await pool.query(`
-      INSERT INTO ur_metrics_server_info(start_time, total_requests, last_updated)
-      VALUES($1, 0, $1)
-      ON CONFLICT (id) DO NOTHING
-    `, [now]);
-    
-    return {
-      startTime: now.toISOString(),
-      totalRequests: 0,
-      lastUpdated: now.toISOString()
-    };
-  } catch (err) {
-    _logger('Error getting server info: %O', err);
-    return {
-      startTime: new Date().toISOString(),
-      totalRequests: 0,
-      lastUpdated: new Date().toISOString()
-    };
-  }
-}
+// Note: The getServerInfo function has been moved earlier in this file.
 
 /**
  * Close the database connection pool
