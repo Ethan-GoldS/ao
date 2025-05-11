@@ -23,10 +23,18 @@ pipe(
   (app) => app.get('/healthcheck', (req, res) => res.status(200).send('OK')),
   // Setup metrics if enabled
   (app) => {
+    logger(`Metrics configuration: ${config.enableMetrics ? 'ENABLED' : 'DISABLED'}`)
     if (config.enableMetrics) {
-      logger('Metrics enabled, setting up dashboard at /dashboard')
+      logger('Setting up metrics dashboard at /dashboard')
       app.use(metricsMiddleware)
       setupDashboard(app)
+      
+      // Add a direct test route to verify dashboard is registered
+      app.get('/metrics-test', (req, res) => {
+        res.send('Metrics system is active. Dashboard should be available at /dashboard')
+      })
+      
+      logger('Metrics dashboard setup complete')
     }
     return app
   },
