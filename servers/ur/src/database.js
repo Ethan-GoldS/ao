@@ -671,33 +671,8 @@ export async function incrementTotalRequests() {
   }
 }
 
-/**
- * Get recent requests
- * @param {number} limit Maximum number of requests to return
- * @returns {Promise<Array>} Recent requests
- */
-export async function getRecentRequests(limit = 100) {
-  if (!pool) return []
-  
-  try {
-    const result = await pool.query(`
-      SELECT 
-        timestamp, 
-        process_id as "processId", 
-        ip, 
-        action, 
-        duration 
-      FROM ur_metrics_requests
-      ORDER BY timestamp DESC
-      LIMIT $1
-    `, [limit])
-    
-    return result.rows
-  } catch (err) {
-    _logger('Error getting recent requests: %O', err)
-    return []
-  }
-}
+// Note: The getRecentRequests function has been moved and enhanced
+// with additional fields and details. See the implementation further down in this file.
 
 /**
  * Get process counts
