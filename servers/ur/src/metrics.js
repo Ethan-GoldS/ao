@@ -333,9 +333,9 @@ export function startTracking(req) {
 }
 
 /**
- * Finish tracking a request and record metrics
- * @param {Object} tracking Request tracking object from startTracking
- * @param {String} action Action from request
+ * Finish tracking a request and record metrics with enhanced data
+ * @param {Object} tracking Request tracking object with detailed request info
+ * @param {String} action Action from request or response
  */
 export async function finishTracking(tracking, action) {
   if (!tracking || !tracking.startTime) return;
@@ -345,22 +345,46 @@ export async function finishTracking(tracking, action) {
   
   if (!processId) return;
   
-  // Create request object with consistent timestamp
+  // Get detailed tracking info if provided
+  const details = tracking.details || {};
+  
+  // Create enhanced request object with all available data
   const requestData = {
     timestamp: new Date(tracking.startTime).toISOString(), // Use the actual request start time
     processId,
     ip,
     action,
-    duration
+    duration,
+    method: details.method || null,
+    path: details.path || null,
+    referer: details.referer || null,
+    origin: details.origin || null,
+    userAgent: details.userAgent || null,
+    contentType: details.contentType || null,
+    tags: details.tags || null,
+    jsonBody: details.jsonBody || null,
+    rawBody: details.rawBody || null
   };
   
   if (usePostgres && db.isConnected()) {
-    // Store in PostgreSQL
+    // Store in PostgreSQL with enhanced data
     try {
-      // Insert the request metrics
-      await db.insertRequestMetrics(requestData);
+      // Insert the request metrics with all fields
+      await db.insertRequestMetrics({
+        timestamp: requestData.timestamp,
+        processId,
+        ip,
+        action,
+        duration,
+        method: requestData.method,
+        path: requestData.path,
+        referer: requestData.referer,
+        origin: requestData.origin,
+        userAgent: requestData.userAgent,
+        contentType: requestData.contentType
+      });
       
-      // Update process counts and timing
+      // Update process counts and timing with enhanced statistics
       await db.updateProcessCount(processId, duration);
       
       // Update action counts and timing if action exists
@@ -368,10 +392,15 @@ export async function finishTracking(tracking, action) {
         await db.updateActionCount(action, duration);
       }
       
-      _logger('Recorded metrics for process %s, action %s, duration %dms in PostgreSQL', 
-        processId, action, duration);
+      // Store detailed request info if available
+      if (Object.keys(details).length > 0) {
+        await db.insertRequestDetails(requestData);
+      }
+      
+      _logger('Recorded enhanced metrics for process %s, action %s, duration %dms in PostgreSQL', 
+        processId, action || 'unknown', duration);
     } catch (err) {
-      _logger('Error recording metrics in PostgreSQL: %O', err);
+      _logger('Error recording enhanced metrics in PostgreSQL: %O', err);
       // Fall back to in-memory storage if database operation fails
       storeMetricsInMemory(requestData, duration);
     }

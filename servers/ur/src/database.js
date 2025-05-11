@@ -189,7 +189,22 @@ async function createTables() {
     _logger('POSTGRES: Creating tables in ur_metrics database')
     console.log('POSTGRES: Creating tables in ur_metrics database')
     
-    // Create requests table
+    // Drop existing tables to recreate with improved schema
+    await client.query(`
+      DROP TABLE IF EXISTS ur_metrics_requests CASCADE;
+      DROP TABLE IF EXISTS ur_metrics_process_counts CASCADE;
+      DROP TABLE IF EXISTS ur_metrics_action_counts CASCADE;
+      DROP TABLE IF EXISTS ur_metrics_ip_counts CASCADE;
+      DROP TABLE IF EXISTS ur_metrics_referrer_counts CASCADE;
+      DROP TABLE IF EXISTS ur_metrics_time_series CASCADE;
+      DROP TABLE IF EXISTS ur_metrics_request_details CASCADE;
+      DROP TABLE IF EXISTS ur_metrics_server_info CASCADE;
+    `)
+    
+    _logger('POSTGRES: Dropped existing tables for fresh schema')
+    console.log('POSTGRES: Dropped existing tables for fresh schema')
+    
+    // Create improved requests table with more details
     await client.query(`
       CREATE TABLE IF NOT EXISTS ur_metrics_requests (
         id SERIAL PRIMARY KEY,
@@ -198,35 +213,51 @@ async function createTables() {
         ip TEXT,
         action TEXT,
         duration INTEGER,
+        method TEXT,
+        path TEXT,
+        referer TEXT,
+        origin TEXT,
+        user_agent TEXT,
+        content_type TEXT,
         created_at TIMESTAMPTZ DEFAULT NOW()
       )
     `)
     
-    // Create process counts table
+    // Create process counts table with more statistics
     await client.query(`
       CREATE TABLE IF NOT EXISTS ur_metrics_process_counts (
         process_id TEXT PRIMARY KEY,
         count INTEGER DEFAULT 0,
         total_duration BIGINT DEFAULT 0,
+        min_duration INTEGER,
+        max_duration INTEGER,
+        first_seen TIMESTAMPTZ,
+        last_seen TIMESTAMPTZ,
         updated_at TIMESTAMPTZ DEFAULT NOW()
       )
     `)
     
-    // Create action counts table
+    // Create action counts table with more statistics
     await client.query(`
       CREATE TABLE IF NOT EXISTS ur_metrics_action_counts (
         action TEXT PRIMARY KEY,
         count INTEGER DEFAULT 0,
         total_duration BIGINT DEFAULT 0,
+        min_duration INTEGER,
+        max_duration INTEGER,
+        first_seen TIMESTAMPTZ,
+        last_seen TIMESTAMPTZ,
         updated_at TIMESTAMPTZ DEFAULT NOW()
       )
     `)
     
-    // Create IP counts table
+    // Create IP counts table with more details
     await client.query(`
       CREATE TABLE IF NOT EXISTS ur_metrics_ip_counts (
         ip TEXT PRIMARY KEY,
         count INTEGER DEFAULT 0,
+        first_seen TIMESTAMPTZ,
+        last_seen TIMESTAMPTZ,
         updated_at TIMESTAMPTZ DEFAULT NOW()
       )
     `)
@@ -236,11 +267,13 @@ async function createTables() {
       CREATE TABLE IF NOT EXISTS ur_metrics_referrer_counts (
         referrer TEXT PRIMARY KEY,
         count INTEGER DEFAULT 0,
+        first_seen TIMESTAMPTZ,
+        last_seen TIMESTAMPTZ,
         updated_at TIMESTAMPTZ DEFAULT NOW()
       )
     `)
     
-    // Create time series data table
+    // Create improved time series data table
     await client.query(`
       CREATE TABLE IF NOT EXISTS ur_metrics_time_series (
         id SERIAL PRIMARY KEY,
@@ -248,34 +281,28 @@ async function createTables() {
         hour INTEGER NOT NULL,
         total_requests INTEGER DEFAULT 0,
         process_counts JSONB DEFAULT '{}'::jsonb,
+        action_counts JSONB DEFAULT '{}'::jsonb,
         created_at TIMESTAMPTZ DEFAULT NOW(),
         UNIQUE(timestamp)
       )
     `)
     
-    // Create request details table
+    // Create enhanced request details table for rich data
     await client.query(`
       CREATE TABLE IF NOT EXISTS ur_metrics_request_details (
         id SERIAL PRIMARY KEY,
         process_id TEXT NOT NULL,
+        timestamp TIMESTAMPTZ NOT NULL,
         ip TEXT,
         referer TEXT,
-        timestamp TIMESTAMPTZ NOT NULL,
-        details JSONB,
+        action TEXT,
+        method TEXT,
+        path TEXT,
+        tags JSONB,
+        body JSONB,
+        duration INTEGER,
         created_at TIMESTAMPTZ DEFAULT NOW()
       )
-    `)
-    
-    // Create index on process_id for request details
-    await client.query(`
-      CREATE INDEX IF NOT EXISTS idx_request_details_process_id 
-      ON ur_metrics_request_details(process_id)
-    `)
-    
-    // Create index on timestamp for requests
-    await client.query(`
-      CREATE INDEX IF NOT EXISTS idx_requests_timestamp 
-      ON ur_metrics_requests(timestamp)
     `)
     
     // Create server info table for metadata
@@ -286,6 +313,16 @@ async function createTables() {
         total_requests BIGINT DEFAULT 0,
         last_updated TIMESTAMPTZ DEFAULT NOW()
       )
+    `)
+    
+    // Create indexes for better query performance
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_request_details_process_id ON ur_metrics_request_details(process_id);
+      CREATE INDEX IF NOT EXISTS idx_request_details_timestamp ON ur_metrics_request_details(timestamp DESC);
+      CREATE INDEX IF NOT EXISTS idx_requests_timestamp ON ur_metrics_requests(timestamp DESC);
+      CREATE INDEX IF NOT EXISTS idx_requests_process_id ON ur_metrics_requests(process_id);
+      CREATE INDEX IF NOT EXISTS idx_requests_action ON ur_metrics_requests(action);
+      CREATE INDEX IF NOT EXISTS idx_time_series_timestamp ON ur_metrics_time_series(timestamp DESC);
     `)
     
     // Commit transaction
@@ -302,30 +339,67 @@ async function createTables() {
 }
 
 /**
- * Insert request metrics into the database
- * @param {Object} request Request metrics object
+ * Insert enhanced request metrics with all available fields
+ * @param {Object} request Enhanced request metrics object
  * @returns {Promise<boolean>} Success flag
  */
 export async function insertRequestMetrics(request) {
   if (!pool) return false
   
   try {
-    const { timestamp, processId, ip, action, duration } = request
+    const { 
+      timestamp, 
+      processId, 
+      ip, 
+      action, 
+      duration,
+      method,
+      path,
+      referer,
+      origin,
+      userAgent,
+      contentType
+    } = request
     
-    const result = await pool.query(
-      'INSERT INTO ur_metrics_requests(timestamp, process_id, ip, action, duration) VALUES($1, $2, $3, $4, $5) RETURNING id',
-      [new Date(timestamp), processId, ip, action, duration]
-    )
+    // Use parameterized query with all fields from our enhanced schema
+    const result = await pool.query(`
+      INSERT INTO ur_metrics_requests(
+        timestamp, 
+        process_id, 
+        ip, 
+        action, 
+        duration, 
+        method, 
+        path, 
+        referer, 
+        origin, 
+        user_agent, 
+        content_type
+      ) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) 
+      RETURNING id
+    `, [
+      new Date(timestamp), 
+      processId, 
+      ip || null, 
+      action || null, 
+      duration || 0,
+      method || null,
+      path || null,
+      referer || null,
+      origin || null,
+      userAgent || null,
+      contentType || null
+    ])
     
     return result.rows.length > 0
   } catch (err) {
-    _logger('Error inserting request metrics: %O', err)
+    _logger('Error inserting enhanced request metrics: %O', err)
     return false
   }
 }
 
 /**
- * Insert or update process count
+ * Insert or update process count with enhanced statistics
  * @param {string} processId Process ID
  * @param {number} duration Request duration in ms
  * @returns {Promise<boolean>} Success flag
@@ -334,15 +408,30 @@ export async function updateProcessCount(processId, duration) {
   if (!pool || !processId) return false
   
   try {
+    // Use proper timestamps for first_seen and last_seen
+    const now = new Date();
+    
     await pool.query(`
-      INSERT INTO ur_metrics_process_counts(process_id, count, total_duration, updated_at)
-      VALUES($1, 1, $2, NOW())
+      INSERT INTO ur_metrics_process_counts(
+        process_id, 
+        count, 
+        total_duration, 
+        min_duration, 
+        max_duration,
+        first_seen,
+        last_seen,
+        updated_at
+      )
+      VALUES($1, 1, $2, $2, $2, $3, $3, $3)
       ON CONFLICT (process_id) 
       DO UPDATE SET 
         count = ur_metrics_process_counts.count + 1,
         total_duration = ur_metrics_process_counts.total_duration + $2,
-        updated_at = NOW()
-    `, [processId, duration])
+        min_duration = LEAST(ur_metrics_process_counts.min_duration, $2),
+        max_duration = GREATEST(ur_metrics_process_counts.max_duration, $2),
+        last_seen = $3,
+        updated_at = $3
+    `, [processId, duration, now])
     
     return true
   } catch (err) {
@@ -352,7 +441,7 @@ export async function updateProcessCount(processId, duration) {
 }
 
 /**
- * Insert or update action count
+ * Insert or update action count with enhanced statistics
  * @param {string} action Action name
  * @param {number} duration Request duration in ms
  * @returns {Promise<boolean>} Success flag
@@ -361,15 +450,29 @@ export async function updateActionCount(action, duration) {
   if (!pool || !action) return false
   
   try {
+    const now = new Date();
+    
     await pool.query(`
-      INSERT INTO ur_metrics_action_counts(action, count, total_duration, updated_at)
-      VALUES($1, 1, $2, NOW())
+      INSERT INTO ur_metrics_action_counts(
+        action, 
+        count, 
+        total_duration, 
+        min_duration, 
+        max_duration,
+        first_seen,
+        last_seen,
+        updated_at
+      )
+      VALUES($1, 1, $2, $2, $2, $3, $3, $3)
       ON CONFLICT (action) 
       DO UPDATE SET 
         count = ur_metrics_action_counts.count + 1,
         total_duration = ur_metrics_action_counts.total_duration + $2,
-        updated_at = NOW()
-    `, [action, duration])
+        min_duration = LEAST(ur_metrics_action_counts.min_duration, $2),
+        max_duration = GREATEST(ur_metrics_action_counts.max_duration, $2),
+        last_seen = $3,
+        updated_at = $3
+    `, [action, duration, now])
     
     return true
   } catch (err) {
@@ -379,22 +482,25 @@ export async function updateActionCount(action, duration) {
 }
 
 /**
- * Insert or update IP count
+ * Insert or update IP count with enhanced statistics
  * @param {string} ip IP address
  * @returns {Promise<boolean>} Success flag
  */
 export async function updateIpCount(ip) {
-  if (!pool || !ip || ip === 'unknown') return false
+  if (!pool || !ip || ip === '') return false
   
   try {
+    const now = new Date();
+    
     await pool.query(`
-      INSERT INTO ur_metrics_ip_counts(ip, count, updated_at)
-      VALUES($1, 1, NOW())
+      INSERT INTO ur_metrics_ip_counts(ip, count, first_seen, last_seen, updated_at)
+      VALUES($1, 1, $2, $2, $2)
       ON CONFLICT (ip) 
       DO UPDATE SET 
         count = ur_metrics_ip_counts.count + 1,
-        updated_at = NOW()
-    `, [ip])
+        last_seen = $2,
+        updated_at = $2
+    `, [ip, now])
     
     return true
   } catch (err) {
@@ -404,22 +510,25 @@ export async function updateIpCount(ip) {
 }
 
 /**
- * Insert or update referrer count
+ * Insert or update referrer count with enhanced statistics
  * @param {string} referrer Referrer URL
  * @returns {Promise<boolean>} Success flag
  */
 export async function updateReferrerCount(referrer) {
-  if (!pool || !referrer || referrer === 'unknown') return false
+  if (!pool || !referrer || referrer === '') return false
   
   try {
+    const now = new Date();
+    
     await pool.query(`
-      INSERT INTO ur_metrics_referrer_counts(referrer, count, updated_at)
-      VALUES($1, 1, NOW())
+      INSERT INTO ur_metrics_referrer_counts(referrer, count, first_seen, last_seen, updated_at)
+      VALUES($1, 1, $2, $2, $2)
       ON CONFLICT (referrer) 
       DO UPDATE SET 
         count = ur_metrics_referrer_counts.count + 1,
-        updated_at = NOW()
-    `, [referrer])
+        last_seen = $2,
+        updated_at = $2
+    `, [referrer, now])
     
     return true
   } catch (err) {
@@ -429,23 +538,93 @@ export async function updateReferrerCount(referrer) {
 }
 
 /**
- * Insert request details
- * @param {Object} details Request details object
+ * Insert enhanced request details
+ * @param {Object} details Request details object with rich data
  * @returns {Promise<boolean>} Success flag
  */
 export async function insertRequestDetails(details) {
   if (!pool || !details || !details.processId) return false
   
   try {
-    const { processId, ip, referer, timestamp } = details
+    const { 
+      processId, 
+      ip, 
+      referer, 
+      timestamp, 
+      action, 
+      method, 
+      path,
+      tags,
+      body,
+      duration,
+      jsonBody
+    } = details
     
-    // Store detailed info as JSON, limiting to 20 entries per process
+    // Prepare JSONB data carefully
+    let tagsJson = null;
+    let bodyJson = null;
+    
+    // Handle tags - important for AO processes
+    if (tags) {
+      if (typeof tags === 'string') {
+        try {
+          tagsJson = JSON.parse(tags);
+        } catch (e) {
+          // If parsing fails, store as an array with one string item
+          tagsJson = [tags];
+        }
+      } else if (Array.isArray(tags)) {
+        tagsJson = tags;
+      } else if (typeof tags === 'object') {
+        tagsJson = tags;
+      }
+    }
+    
+    // Handle body data
+    if (jsonBody) {
+      bodyJson = jsonBody;
+    } else if (body) {
+      if (typeof body === 'string') {
+        try {
+          bodyJson = JSON.parse(body);
+        } catch (e) {
+          // Store as string if parsing fails
+          bodyJson = { raw: body.substring(0, 5000) };
+        }
+      } else if (typeof body === 'object') {
+        bodyJson = body;
+      }
+    }
+    
+    // Store detailed info with all fields properly mapped
     await pool.query(`
-      INSERT INTO ur_metrics_request_details(process_id, ip, referer, timestamp, details)
-      VALUES($1, $2, $3, $4, $5)
-    `, [processId, ip, referer, new Date(timestamp), JSON.stringify(details)])
+      INSERT INTO ur_metrics_request_details(
+        process_id, 
+        timestamp, 
+        ip, 
+        referer, 
+        action, 
+        method, 
+        path, 
+        tags, 
+        body, 
+        duration
+      )
+      VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+    `, [
+      processId, 
+      new Date(timestamp), 
+      ip || null, 
+      referer || null,
+      action || null,
+      method || null,
+      path || null,
+      tagsJson ? JSON.stringify(tagsJson) : null,
+      bodyJson ? JSON.stringify(bodyJson) : null,
+      duration || null
+    ])
     
-    // Limit to 20 most recent records per process_id
+    // Limit to 100 most recent records per process_id
     await pool.query(`
       WITH ranked_details AS (
         SELECT id, ROW_NUMBER() OVER (PARTITION BY process_id ORDER BY timestamp DESC) as rn
@@ -454,7 +633,7 @@ export async function insertRequestDetails(details) {
       )
       DELETE FROM ur_metrics_request_details
       WHERE id IN (
-        SELECT id FROM ranked_details WHERE rn > 20
+        SELECT id FROM ranked_details WHERE rn > 100
       )
     `, [processId])
     
@@ -735,28 +914,290 @@ export function getDbPool() {
 }
 
 /**
- * Get time series data
- * @param {number} hours Number of hours of data to return
- * @returns {Promise<Array>} Time series data
+ * Update time series data with advanced metrics
+ * @param {string} processId Process ID
+ * @param {string} timestamp ISO timestamp string
+ * @param {string} action Optional action name
+ * @returns {Promise<boolean>} Success flag
+ */
+export async function updateTimeSeriesData(processId, timestamp, action = null) {
+  if (!pool || !processId) return false
+  
+  try {
+    const now = new Date(timestamp || Date.now())
+    const hour = now.getUTCHours() // Use UTC hours for consistency
+    
+    // Round timestamp to the hour for bucketing
+    const bucketTimestamp = new Date(now)
+    bucketTimestamp.setUTCMinutes(0, 0, 0)
+    
+    // First, try to find and update existing bucket
+    const existingBucket = await pool.query(`
+      SELECT id, process_counts, action_counts 
+      FROM ur_metrics_time_series 
+      WHERE timestamp = $1
+    `, [bucketTimestamp])
+    
+    if (existingBucket.rows.length > 0) {
+      // Update existing bucket
+      const { id, process_counts, action_counts } = existingBucket.rows[0]
+      
+      // Parse existing JSON data
+      const processCounts = process_counts || {}
+      const actionCounts = action_counts || {}
+      
+      // Update counts
+      processCounts[processId] = (processCounts[processId] || 0) + 1
+      if (action) {
+        actionCounts[action] = (actionCounts[action] || 0) + 1
+      }
+      
+      // Update the row
+      await pool.query(`
+        UPDATE ur_metrics_time_series 
+        SET 
+          total_requests = total_requests + 1,
+          process_counts = $1,
+          action_counts = $2
+        WHERE id = $3
+      `, [JSON.stringify(processCounts), JSON.stringify(actionCounts), id])
+    } else {
+      // Create new bucket
+      const processCounts = {}
+      processCounts[processId] = 1
+      
+      const actionCounts = {}
+      if (action) {
+        actionCounts[action] = 1
+      }
+      
+      await pool.query(`
+        INSERT INTO ur_metrics_time_series(
+          timestamp, 
+          hour, 
+          total_requests, 
+          process_counts,
+          action_counts
+        )
+        VALUES($1, $2, 1, $3, $4)
+      `, [
+        bucketTimestamp, 
+        hour, 
+        JSON.stringify(processCounts),
+        JSON.stringify(actionCounts)
+      ])
+    }
+    
+    return true
+  } catch (err) {
+    _logger('Error updating time series data: %O', err)
+    return false
+  }
+}
+
+/**
+ * Get time series data for dashboard with additional metrics
+ * @param {number} hours Number of hours of data to retrieve
+ * @returns {Promise<Array>} Time series data array
  */
 export async function getTimeSeriesData(hours = 24) {
   if (!pool) return []
-  
   try {
     const result = await pool.query(`
       SELECT 
         timestamp, 
         hour, 
         total_requests as "totalRequests", 
-        process_counts as "processCounts"
+        process_counts as "processCounts",
+        action_counts as "actionCounts"
       FROM ur_metrics_time_series
       ORDER BY timestamp DESC
       LIMIT $1
     `, [hours])
-    
     return result.rows
   } catch (err) {
     _logger('Error getting time series data: %O', err)
+    return []
+  }
+}
+
+/**
+ * Get top process counts with extended metrics
+ * @param {number} limit Maximum number of items to return
+ * @returns {Promise<Array>} Top process counts with statistics
+ */
+export async function getTopProcessCounts(limit = 20) {
+  if (!pool) return []
+  try {
+    const result = await pool.query(`
+      SELECT 
+        process_id, 
+        count, 
+        total_duration,
+        min_duration,
+        max_duration,
+        first_seen,
+        last_seen
+      FROM ur_metrics_process_counts
+      ORDER BY count DESC
+      LIMIT $1
+    `, [limit])
+    return result.rows
+  } catch (err) {
+    _logger('Error getting top process counts: %O', err)
+    return []
+  }
+}
+
+/**
+ * Get top action counts with extended metrics
+ * @param {number} limit Maximum number of items to return
+ * @returns {Promise<Array>} Top action counts with statistics
+ */
+export async function getTopActionCounts(limit = 20) {
+  if (!pool) return []
+  try {
+    const result = await pool.query(`
+      SELECT 
+        action, 
+        count, 
+        total_duration,
+        min_duration,
+        max_duration,
+        first_seen,
+        last_seen
+      FROM ur_metrics_action_counts
+      ORDER BY count DESC
+      LIMIT $1
+    `, [limit])
+    return result.rows
+  } catch (err) {
+    _logger('Error getting top action counts: %O', err)
+    return []
+  }
+}
+
+/**
+ * Get top IP counts with extended metrics
+ * @param {number} limit Maximum number of items to return
+ * @returns {Promise<Array>} Top IP counts with statistics
+ */
+export async function getTopIpCounts(limit = 20) {
+  if (!pool) return []
+  try {
+    const result = await pool.query(`
+      SELECT 
+        ip, 
+        count,
+        first_seen,
+        last_seen
+      FROM ur_metrics_ip_counts
+      ORDER BY count DESC
+      LIMIT $1
+    `, [limit])
+    return result.rows
+  } catch (err) {
+    _logger('Error getting top IP counts: %O', err)
+    return []
+  }
+}
+
+/**
+ * Get top referrer counts with extended metrics
+ * @param {number} limit Maximum number of items to return
+ * @returns {Promise<Array>} Top referrer counts with statistics
+ */
+export async function getTopReferrerCounts(limit = 20) {
+  if (!pool) return []
+  try {
+    const result = await pool.query(`
+      SELECT 
+        referrer, 
+        count,
+        first_seen,
+        last_seen
+      FROM ur_metrics_referrer_counts
+      ORDER BY count DESC
+      LIMIT $1
+    `, [limit])
+    return result.rows
+  } catch (err) {
+    _logger('Error getting top referrer counts: %O', err)
+    return []
+  }
+}
+
+/**
+ * Get recent requests with detailed information
+ * @param {number} limit Maximum number of requests to return
+ * @returns {Promise<Array>} Recent requests with details
+ */
+export async function getRecentRequests(limit = 50) {
+  if (!pool) return []
+  try {
+    const result = await pool.query(`
+      SELECT 
+        r.id,
+        r.timestamp,
+        r.process_id,
+        r.action,
+        r.ip,
+        r.duration,
+        r.method,
+        r.path,
+        r.referer,
+        r.origin,
+        r.user_agent,
+        r.content_type,
+        d.tags,
+        d.body
+      FROM ur_metrics_requests r
+      LEFT JOIN ur_metrics_request_details d ON r.process_id = d.process_id AND r.timestamp = d.timestamp
+      ORDER BY r.timestamp DESC
+      LIMIT $1
+    `, [limit])
+    
+    // Process and normalize the results
+    return result.rows.map(row => {
+      // Parse JSONB fields if they exist
+      let tags = null;
+      let body = null;
+      
+      if (row.tags) {
+        try {
+          tags = typeof row.tags === 'string' ? JSON.parse(row.tags) : row.tags;
+        } catch (e) {
+          // Silent catch
+        }
+      }
+      
+      if (row.body) {
+        try {
+          body = typeof row.body === 'string' ? JSON.parse(row.body) : row.body;
+        } catch (e) {
+          // Silent catch
+        }
+      }
+      
+      return {
+        id: row.id,
+        timestamp: row.timestamp,
+        processId: row.process_id,
+        action: row.action,
+        ip: row.ip,
+        duration: row.duration,
+        method: row.method,
+        path: row.path,
+        referer: row.referer,
+        origin: row.origin,
+        userAgent: row.user_agent,
+        contentType: row.content_type,
+        tags,
+        body
+      };
+    });
+  } catch (err) {
+    _logger('Error getting recent requests: %O', err)
     return []
   }
 }

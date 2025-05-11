@@ -49,6 +49,7 @@ export function mountDashboard(app) {
           timeSeriesData = dbTimeSeriesData.map(item => {
             // Normalize the data format for the UI
             let processCounts = item.processCounts;
+            let actionCounts = item.actionCounts;
             
             // Handle PostgreSQL JSONB that may be returned as a string
             if (typeof processCounts === 'string') {
@@ -56,6 +57,15 @@ export function mountDashboard(app) {
                 processCounts = JSON.parse(processCounts);
               } catch (e) {
                 processCounts = {};
+              }
+            }
+            
+            // Handle action counts from JSONB
+            if (typeof actionCounts === 'string') {
+              try {
+                actionCounts = JSON.parse(actionCounts);
+              } catch (e) {
+                actionCounts = {};
               }
             }
             
@@ -68,6 +78,8 @@ export function mountDashboard(app) {
               totalRequests: parseInt(item.totalRequests || item.total_requests || 0, 10),
               // Make sure process counts is an object
               processCounts: processCounts || {},
+              // Include action counts for actions chart
+              actionCounts: actionCounts || {},
               // Add a properly formatted hour field
               hour: item.hour || timestamp.getUTCHours()
             };
@@ -92,13 +104,105 @@ export function mountDashboard(app) {
         _logger('No time series data available');
       }
       
+      // Get additional metrics directly from the database for real-time accuracy
+      let processCounts = {};
+      let actionCounts = {};
+      let ipCounts = {};
+      let referrerCounts = {};
+      let recentRequests = [];
+      
+      try {
+        // Fetch top process counts directly from database
+        const topProcesses = await db.getTopProcessCounts(20);
+        if (topProcesses && topProcesses.length > 0) {
+          topProcesses.forEach(p => {
+            processCounts[p.process_id] = {
+              count: p.count,
+              totalDuration: p.total_duration,
+              avgDuration: p.count > 0 ? Math.round(p.total_duration / p.count) : 0,
+              minDuration: p.min_duration || 0,
+              maxDuration: p.max_duration || 0,
+              firstSeen: p.first_seen || null,
+              lastSeen: p.last_seen || null
+            };
+          });
+        }
+        
+        // Fetch top action counts
+        const topActions = await db.getTopActionCounts(20);
+        if (topActions && topActions.length > 0) {
+          topActions.forEach(a => {
+            actionCounts[a.action] = {
+              count: a.count,
+              totalDuration: a.total_duration,
+              avgDuration: a.count > 0 ? Math.round(a.total_duration / a.count) : 0,
+              minDuration: a.min_duration || 0,
+              maxDuration: a.max_duration || 0,
+              firstSeen: a.first_seen || null,
+              lastSeen: a.last_seen || null
+            };
+          });
+        }
+        
+        // Fetch top IP counts
+        const topIps = await db.getTopIpCounts(20);
+        if (topIps && topIps.length > 0) {
+          topIps.forEach(i => {
+            ipCounts[i.ip] = {
+              count: i.count,
+              firstSeen: i.first_seen || null,
+              lastSeen: i.last_seen || null
+            };
+          });
+        }
+        
+        // Fetch top referrer counts
+        const topReferrers = await db.getTopReferrerCounts(20);
+        if (topReferrers && topReferrers.length > 0) {
+          topReferrers.forEach(r => {
+            referrerCounts[r.referrer] = {
+              count: r.count,
+              firstSeen: r.first_seen || null,
+              lastSeen: r.last_seen || null
+            };
+          });
+        }
+        
+        // Fetch recent requests with detailed info
+        const recent = await db.getRecentRequests(50);
+        if (recent && recent.length > 0) {
+          recentRequests = recent;
+        }
+        
+      } catch (err) {
+        _logger('Error fetching detailed metrics from database: %O', err);
+        // Fall back to in-memory metrics
+        processCounts = metrics.processCounts || {};
+        actionCounts = metrics.actionCounts || {};
+        ipCounts = metrics.ipCounts || {};
+        referrerCounts = metrics.referrerCounts || {};
+        recentRequests = metrics.recentRequests || [];
+      }
+      
+      // Create comprehensive dashboard data object with all metrics
       const dashboardData = {
         totalRequests: metrics.totalRequests || 0,
-        uniqueProcessIds: Object.keys(metrics.processCounts || {}).length,
-        uniqueIps: Object.keys(metrics.ipCounts || {}).length,
-        timeSeriesData: timeSeriesData,
-        startTime: metrics.startTime,
-        lastUpdated: new Date().toISOString()
+        timeSeriesData,
+        processCounts,
+        actionCounts,
+        ipCounts,
+        referrerCounts,
+        recentRequests,
+        startTime: metrics.startTime || new Date().toISOString(),
+        // Add server info for dashboard header
+        serverInfo: {
+          startTime: metrics.startTime || new Date().toISOString(),
+          uptime: Math.round((Date.now() - new Date(metrics.startTime || Date.now()).getTime()) / 1000 / 60 / 60) + ' hours',
+          totalRequests: metrics.totalRequests || 0,
+          uniqueProcessIds: Object.keys(processCounts).length,
+          uniqueActions: Object.keys(actionCounts).length,
+          uniqueIps: Object.keys(ipCounts).length
+        }
       };
       
       res.setHeader('Content-Type', 'application/json');
