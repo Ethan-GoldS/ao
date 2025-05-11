@@ -144,7 +144,7 @@ function generateDashboardHtml() {
     <html>
     <head>
       <title>AO Router Metrics Dashboard</title>
-      <meta http-equiv="refresh" content="30">
+      <!-- Auto-refresh handled by JavaScript instead of meta tag -->
       <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
       <style>
         body {
@@ -300,11 +300,27 @@ function generateDashboardHtml() {
           padding: 5px;
           width: 200px;
         }
+        .refresh-btn {
+          background: #0066cc;
+          color: white;
+          border: none;
+          padding: 4px 8px;
+          border-radius: 3px;
+          cursor: pointer;
+          margin-left: 10px;
+        }
+        .refresh-btn.paused {
+          background: #cc4400;
+        }
       </style>
     </head>
     <body>
       <h1>AO Router Metrics Dashboard</h1>
-      <div class="timestamp">Auto-refreshes every 30 seconds - Last updated: ${new Date().toISOString()}</div>
+      <div class="timestamp">
+        <span id="refresh-status">Auto-refreshes every 5 seconds</span> - 
+        Last updated: <span id="last-updated">${new Date().toISOString()}</span>
+        <button id="toggle-refresh" class="refresh-btn">Pause</button>
+      </div>
       
       <div class="stats-overview">
         <div class="stat-box">
@@ -442,9 +458,9 @@ function generateDashboardHtml() {
       </div>
       
       <script>
-        // Initialize time series chart
-        const timeLabels = ${JSON.stringify(timeLabels)};
-        const timeSeriesData = ${JSON.stringify(timeSeriesData)};
+        // Initialize time series chart - reverse the arrays to show most recent data on the right
+        const timeLabels = ${JSON.stringify(timeLabels.reverse())};
+        const timeSeriesData = ${JSON.stringify(timeSeriesData.reverse())};
         
         const timeCtx = document.getElementById('timeSeriesChart').getContext('2d');
         const timeSeriesChart = new Chart(timeCtx, {
@@ -630,11 +646,43 @@ function generateDashboardHtml() {
           const hours = this.value;
           sliderValue.innerText = 'Last ' + hours + (hours == 1 ? ' hour' : ' hours');
           
-          // Update chart with selected range
-          timeSeriesChart.data.labels = timeLabels.slice(-hours);
-          timeSeriesChart.data.datasets[0].data = timeSeriesData.slice(-hours);
+          // Update chart with selected range - use first N hours since we reversed the arrays
+          timeSeriesChart.data.labels = timeLabels.slice(0, hours);
+          timeSeriesChart.data.datasets[0].data = timeSeriesData.slice(0, hours);
           timeSeriesChart.update();
         });
+        
+        // Auto-refresh functionality
+        let refreshInterval;
+        let isRefreshing = true;
+        const refreshButton = document.getElementById('toggle-refresh');
+        const refreshStatus = document.getElementById('refresh-status');
+        const lastUpdatedSpan = document.getElementById('last-updated');
+        
+        function startAutoRefresh() {
+          refreshInterval = setInterval(function() {
+            if (isRefreshing) {
+              window.location.reload();
+            }
+          }, 5000); // Refresh every 5 seconds
+        }
+        
+        refreshButton.addEventListener('click', function() {
+          isRefreshing = !isRefreshing;
+          
+          if (isRefreshing) {
+            refreshButton.textContent = 'Pause';
+            refreshButton.classList.remove('paused');
+            refreshStatus.textContent = 'Auto-refreshes every 5 seconds';
+          } else {
+            refreshButton.textContent = 'Resume';
+            refreshButton.classList.add('paused');
+            refreshStatus.textContent = 'Auto-refresh paused';
+          }
+        });
+        
+        // Start auto-refresh when page loads
+        startAutoRefresh();
         
         // Filter functionality
         document.getElementById('requestFilter').addEventListener('input', function() {
