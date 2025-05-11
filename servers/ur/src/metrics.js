@@ -712,7 +712,21 @@ async function loadMetricsFromDatabase() {
       _logger('Loaded %d time series data points', timeSeriesData.length);
     } else {
       // Initialize time series if none exists
-      initializeTimeSeriesData();
+      _logger('No time series data found in database, initializing empty time series');
+      // Initialize the time series data with empty buckets
+      const now = new Date();
+      metrics.timeSeriesData = [];
+      
+      // Create empty time buckets going back in time
+      for (let i = 0; i < TIME_SERIES_BUCKETS; i++) {
+        const bucketTime = new Date(now.getTime() - ((TIME_SERIES_BUCKETS - i - 1) * TIME_BUCKET_SIZE_MS));
+        metrics.timeSeriesData.push({
+          timestamp: bucketTime.toISOString(),
+          hour: bucketTime.getUTCHours(),
+          totalRequests: 0,
+          processCounts: {}
+        });
+      }
     }
     
     // Load recent requests and details

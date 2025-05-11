@@ -485,20 +485,20 @@ export async function updateTimeSeriesData(processId, timestamp) {
     // Update or insert time bucket
     await pool.query(`
       INSERT INTO ur_metrics_time_series(timestamp, hour, total_requests, process_counts)
-      VALUES($1, $2, 1, jsonb_build_object($3, 1))
+      VALUES($1, $2, 1, jsonb_build_object($3::text, 1))
       ON CONFLICT (timestamp)
       DO UPDATE SET
         total_requests = ur_metrics_time_series.total_requests + 1,
         process_counts = 
           CASE
-            WHEN ur_metrics_time_series.process_counts ? $3 THEN
+            WHEN ur_metrics_time_series.process_counts ? $3::text THEN
               jsonb_set(
                 ur_metrics_time_series.process_counts,
-                ARRAY[$3],
-                to_jsonb((ur_metrics_time_series.process_counts->>$3)::int + 1)
+                ARRAY[$3::text],
+                to_jsonb((ur_metrics_time_series.process_counts->>$3::text)::int + 1)
               )
             ELSE
-              ur_metrics_time_series.process_counts || jsonb_build_object($3, 1)
+              ur_metrics_time_series.process_counts || jsonb_build_object($3::text, 1)
           END
     `, [bucketTime, bucketTime.getUTCHours(), processId])
     
