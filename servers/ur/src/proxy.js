@@ -20,34 +20,33 @@ export function proxyWith ({ aoUnit, hosts, surUrl, processToHost, ownerToHost }
   const _logger = logger.child('proxy')
   _logger('Configuring to reverse proxy ao %s units...', aoUnit)
 
-  // Configure a simple HTTPS agent for secure connections
+  /**
+   * Default HTTPS agent with secure settings
+   */
   const httpsAgent = new https.Agent({
     keepAlive: true,
-    rejectUnauthorized: true, // Properly verify SSL certificates
-    timeout: 15000 // 15 second socket timeout
+    rejectUnauthorized: true // Verify SSL certificates
   })
 
-  // Create a very simple proxy server with minimal options
-  const proxy = httpProxy.createProxyServer({
-    // Core options needed for HTTPS proxying
-    secure: true,
-    changeOrigin: true,
-    xfwd: true,
-    followRedirects: true,
-    // Set reasonable timeouts
-    proxyTimeout: 30000,
-    // Use our secure agent for HTTPS connections
-    agent: httpsAgent
-  })
+  /**
+   * Create proxy server with default settings
+   * Let the library handle most decisions by default
+   */
+  const proxy = httpProxy.createProxyServer()
   
-  // Handle proxy errors at the global level
+  // Handle proxy errors at the global level to ensure no unhandled errors
   proxy.on('error', (err, req, res) => {
-    _logger('Global proxy error handler caught: %s', err.message)
-    // Only attempt to send a response if it hasn't been sent already
+    _logger('Global proxy error: %s', err.message)
+    // Only send a response if none has been sent yet
     if (!res.headersSent && !res.writableEnded) {
       res.writeHead(502, { 'Content-Type': 'application/json' })
-      res.end(JSON.stringify({ error: 'Proxy connection error', message: err.message }))
+      res.end(JSON.stringify({ error: 'Proxy error', message: err.message || 'Unknown error' }))
     }
+  })
+  
+  // Listen for successful responses to capture metrics
+  proxy.on('proxyRes', (proxyRes, req, res) => {
+    _logger('Received response from target with status: %d', proxyRes.statusCode)
   })
 
   const bailout = aoUnit === 'cu' ? bailoutWith({ fetch, surUrl, processToHost, ownerToHost }) : undefined
@@ -125,24 +124,6 @@ export function proxyWith ({ aoUnit, hosts, surUrl, processToHost, ownerToHost }
             }
 
             _logger('Reverse Proxying process %s to host %s', processId, host)
-            /**
-             * Reverse proxy the request to the underlying selected host.
-             * If an error occurs, return the next iteration for our trampoline to invoke.
-             */
-            const isHttps = host.startsWith('https://')
-            // Don't manipulate headers - let http-proxy handle this
-            
-            // Use minimal proxy options to avoid complications
-            const proxyOptions = { 
-              target: host,
-              secure: true
-            }
-            
-            // For HTTPS targets, ensure we're using proper TLS
-            if (isHttps) {
-              proxyOptions.agent = httpsAgent
-              _logger('Using secure HTTPS options for proxying to %s', host)
-            }
             
             // Record start time for metrics
             const requestStartTime = Date.now()
@@ -154,7 +135,27 @@ export function proxyWith ({ aoUnit, hosts, surUrl, processToHost, ownerToHost }
               endpoint: req.method + ' ' + (req.path || req.url),
               processId: processId,
               query: req.query,
-              timestamp: requestStartTime,
+              timestamp: requestStartTime
+            }
+            
+            /**
+             * Configure proxy options with only essential settings
+             * Using a fresh options object per request to avoid cross-contamination
+             */
+            const proxyOptions = {
+              target: host,
+              changeOrigin: true,
+              xfwd: true,
+              // Preserve host headers and SSL settings
+              secure: true,
+              // Don't buffer to avoid stream issues
+              buffer: undefined
+            }
+            
+            // Add agent only for HTTPS to handle SSL correctly
+            if (host.startsWith('https://')) {
+              proxyOptions.agent = httpsAgent
+              _logger('Using HTTPS settings for %s', host)
             }
             
             // Extract tags and action data from request body if available
@@ -179,41 +180,60 @@ export function proxyWith ({ aoUnit, hosts, surUrl, processToHost, ownerToHost }
               }
             }
             
-            // Execute the proxy request with error handling
-            proxy.web(req, res, proxyOptions, (err) => {
-              const responseTime = Date.now() - requestStartTime
-              
-              if (err) {
-                _logger('Proxy error for %s: %s', processId, err.message)
+            /**
+             * Direct proxy with minimal intervention
+             * Let http-proxy do all the stream handling directly
+             */
+            try {
+              // Set up success handler
+              const onProxyComplete = function(e) {
+                const responseTime = Date.now() - requestStartTime
                 
-                // Record error in metrics
+                // Record metrics for success
                 metricsService.recordRequest({
-                  method: req.method,
-                  path: req.path || req.url,
-                  processId: processId,
-                  error: err.message,
-                  statusCode: 502,
-                  responseTime: responseTime,
-                  timestamp: requestStartTime
+                  ...metricsData,
+                  statusCode: res.statusCode || 200,
+                  responseTime: responseTime
                 })
                 
-                // Try next host in failover chain
-                return resolve(() => revProxy({ failoverAttempt: failoverAttempt + 1, err }))
+                // Clean up event listener - only need it once
+                proxy.removeListener('proxyRes', onProxyComplete)
+                
+                // Successfully completed proxy request
+                resolve()
               }
               
-              // Record successful request in metrics
-              metricsService.recordRequest({
-                method: req.method,
-                path: req.path || req.url,
-                processId: processId,
-                statusCode: res.statusCode || 200,
-                responseTime: responseTime,
-                timestamp: requestStartTime
-              })
+              // Set up error handler
+              const onProxyError = function(err) {
+                const responseTime = Date.now() - requestStartTime
+                
+                _logger('Proxy error for %s: %s', processId, err.message)
+                
+                // Record metrics for error
+                metricsService.recordRequest({
+                  ...metricsData,
+                  error: err.message,
+                  statusCode: 502,
+                  responseTime: responseTime
+                })
+                
+                // Clean up event listener
+                proxy.removeListener('error', onProxyError)
+                
+                // Try next host in failover chain
+                resolve(() => revProxy({ failoverAttempt: failoverAttempt + 1, err }))
+              }
               
-              // Successfully completed proxy - resolve the promise
-              return resolve()
-            })
+              // Add one-time listeners specifically for this request
+              proxy.once('proxyRes', onProxyComplete)
+              proxy.once('error', onProxyError)
+              
+              // Forward the request
+              proxy.web(req, res, proxyOptions)
+            } catch (err) {
+              _logger('Unexpected proxy error: %s', err.message)
+              reject(err)
+            }
           })
         }
 
