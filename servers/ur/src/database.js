@@ -19,12 +19,82 @@ export async function initDatabase() {
     return false
   }
 
-  _logger('Attempting to connect to PostgreSQL with URL: %s', config.dbUrl.replace(/:\/\/[^:]+:[^@]+@/, '://****:****@'))
+  _logger('POSTGRES CONFIG: Attempting to connect with URL: %s', config.dbUrl.replace(/:\/\/[^:]+:[^@]+@/, '://****:****@'))
+  console.log('POSTGRES CONFIG: Attempting to connect with URL:', config.dbUrl.replace(/:\/\/[^:]+:[^@]+@/, '://****:****@'))
   
   try {
-    // Create connection pool
-    pool = new pg.Pool({
+    // First connect to default postgres DB to create our metrics database if needed
+    const adminPool = new pg.Pool({
       connectionString: config.dbUrl,
+      max: 1
+    })
+    
+    try {
+      const adminClient = await adminPool.connect()
+      _logger('POSTGRES: Connected to admin database to check/create metrics database')
+      console.log('POSTGRES: Connected to admin database to check/create metrics database')
+      
+      // Check if our database exists
+      const dbCheckResult = await adminClient.query(
+        "SELECT 1 FROM pg_database WHERE datname = 'ur_metrics'"
+      )
+      
+      // Create the database if it doesn't exist
+      if (dbCheckResult.rows.length === 0) {
+        _logger('POSTGRES: Creating dedicated ur_metrics database')
+        console.log('POSTGRES: Creating dedicated ur_metrics database')
+        await adminClient.query('CREATE DATABASE ur_metrics')
+        _logger('POSTGRES: Created new ur_metrics database successfully')
+        console.log('POSTGRES: Created new ur_metrics database successfully')
+      } else {
+        _logger('POSTGRES: ur_metrics database already exists')
+        console.log('POSTGRES: ur_metrics database already exists')
+      }
+      
+      adminClient.release()
+    } catch (err) {
+      _logger('POSTGRES ERROR: Failed to create database: %O', err)
+      console.error('POSTGRES ERROR: Failed to create database:', err)
+    } finally {
+      await adminPool.end()
+    }
+    
+    // Now connect to our metrics database
+    // Parse the existing connection string and replace the database name
+    let dbUrl = config.dbUrl
+    
+    try {
+      // More robust approach to modify the connection string
+      let newDbUrl = new URL(dbUrl)
+      newDbUrl.pathname = '/ur_metrics'
+      dbUrl = newDbUrl.toString()
+      _logger('POSTGRES: Modified connection URL to use ur_metrics database')
+      console.log('POSTGRES: Modified connection URL to use ur_metrics database')
+    } catch (err) {
+      // Fallback approach for connection strings that might not be valid URLs
+      if (dbUrl.includes('/postgres')) {
+        dbUrl = dbUrl.replace('/postgres', '/ur_metrics')
+      } else if (!dbUrl.includes('/ur_metrics')) {
+        // If no database specified, add ur_metrics
+        const parts = dbUrl.split('@')
+        if (parts.length > 1) {
+          const hostPart = parts[1].split('/')
+          if (hostPart.length === 1) {
+            // No path component, add database
+            dbUrl = `${dbUrl}/ur_metrics`
+          }
+        }
+      }
+      _logger('POSTGRES: Used string replacement to set database to ur_metrics')
+      console.log('POSTGRES: Used string replacement to set database to ur_metrics')
+    }
+    
+    _logger('POSTGRES: Connecting to metrics database at %s', dbUrl.replace(/:\/\/[^:]+:[^@]+@/, '://****:****@'))
+    console.log('POSTGRES: Connecting to metrics database at', dbUrl.replace(/:\/\/[^:]+:[^@]+@/, '://****:****@'))
+    
+    // Create connection pool to the metrics database
+    pool = new pg.Pool({
+      connectionString: dbUrl,
       max: config.dbPoolSize,
       idleTimeoutMillis: 30000,
       connectionTimeoutMillis: 5000,
@@ -32,24 +102,30 @@ export async function initDatabase() {
     
     // Handle pool errors
     pool.on('error', (err) => {
-      _logger('Unexpected database pool error: %O', err)
+      _logger('POSTGRES ERROR: Unexpected database pool error: %O', err)
+      console.error('POSTGRES ERROR: Unexpected database pool error:', err)
     })
 
-    // Test connection
+    // Test connection to metrics database
     const client = await pool.connect()
-    _logger('Successfully acquired PostgreSQL connection')
+    _logger('POSTGRES: Successfully acquired connection to metrics database')
+    console.log('POSTGRES: Successfully acquired connection to metrics database')
     
     const result = await client.query('SELECT NOW(), current_database() as db_name, current_schema as schema_name')
     client.release()
 
-    _logger('Connected to PostgreSQL database %s using schema %s at %s', 
+    _logger('POSTGRES: Connected to database %s using schema %s at %s', 
       result.rows[0].db_name,
       result.rows[0].schema_name, 
       result.rows[0].now)
+    console.log('POSTGRES: Connected to database', result.rows[0].db_name, 
+                'using schema', result.rows[0].schema_name,
+                'at', result.rows[0].now)
     
     // Initialize tables
     const tablesCreated = await createTables()
-    _logger('Database tables initialized: %s', tablesCreated ? 'SUCCESS' : 'FAILED')
+    _logger('POSTGRES: Database tables initialized: %s', tablesCreated ? 'SUCCESS' : 'FAILED')
+    console.log('POSTGRES: Database tables initialized:', tablesCreated ? 'SUCCESS' : 'FAILED')
     
     return true
   } catch (err) {
