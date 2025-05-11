@@ -900,165 +900,23 @@ export async function getActionTiming() {
   }
 }
 
-/**
- * Get process counts
- * @returns {Promise<Object>} Process counts
- */
-export async function getProcessCounts() {
-  if (!pool) return {}
-  
-  try {
-    const result = await pool.query(`
-      SELECT process_id as key, count as value
-      FROM ur_metrics_process_counts
-      ORDER BY count DESC
-    `)
-    
-    // Convert array of {key, value} to object
-    return result.rows.reduce((acc, row) => {
-      acc[row.key] = row.value
-      return acc
-    }, {})
-  } catch (err) {
-    _logger('Error getting process counts: %O', err)
-    return {}
-  }
-}
+// Note: The getProcessCounts function has been moved and enhanced
+// with additional statistics. See the implementation earlier in this file.
 
-/**
- * Get action counts
- * @returns {Promise<Object>} Action counts
- */
-export async function getActionCounts() {
-  if (!pool) return {}
-  
-  try {
-    const result = await pool.query(`
-      SELECT action as key, count as value
-      FROM ur_metrics_action_counts
-      ORDER BY count DESC
-    `)
-    
-    // Convert array of {key, value} to object
-    return result.rows.reduce((acc, row) => {
-      acc[row.key] = row.value
-      return acc
-    }, {})
-  } catch (err) {
-    _logger('Error getting action counts: %O', err)
-    return {}
-  }
-}
+// Note: The getActionCounts function has been moved and enhanced
+// with additional statistics. See the implementation earlier in this file.
 
-/**
- * Get IP counts
- * @returns {Promise<Object>} IP counts
- */
-export async function getIpCounts() {
-  if (!pool) return {}
-  
-  try {
-    const result = await pool.query(`
-      SELECT ip as key, count as value
-      FROM ur_metrics_ip_counts
-      ORDER BY count DESC
-    `)
-    
-    // Convert array of {key, value} to object
-    return result.rows.reduce((acc, row) => {
-      acc[row.key] = row.value
-      return acc
-    }, {})
-  } catch (err) {
-    _logger('Error getting IP counts: %O', err)
-    return {}
-  }
-}
+// Note: The getIpCounts function has been moved and enhanced
+// with additional statistics. See the implementation earlier in this file.
 
-/**
- * Get referrer counts
- * @returns {Promise<Object>} Referrer counts
- */
-export async function getReferrerCounts() {
-  if (!pool) return {}
-  
-  try {
-    const result = await pool.query(`
-      SELECT referrer as key, count as value
-      FROM ur_metrics_referrer_counts
-      ORDER BY count DESC
-    `)
-    
-    // Convert array of {key, value} to object
-    return result.rows.reduce((acc, row) => {
-      acc[row.key] = row.value
-      return acc
-    }, {})
-  } catch (err) {
-    _logger('Error getting referrer counts: %O', err)
-    return {}
-  }
-}
+// Note: The getReferrerCounts function has been moved and enhanced
+// with additional statistics. See the implementation earlier in this file.
 
-/**
- * Get process timing metrics
- * @returns {Promise<Object>} Process timing metrics
- */
-export async function getProcessTiming() {
-  if (!pool) return {}
-  
-  try {
-    const result = await pool.query(`
-      SELECT 
-        process_id as key, 
-        json_build_object(
-          'totalDuration', total_duration,
-          'count', count
-        ) as value
-      FROM ur_metrics_process_counts
-      ORDER BY count DESC
-    `)
-    
-    // Convert array of {key, value} to object
-    return result.rows.reduce((acc, row) => {
-      acc[row.key] = row.value
-      return acc
-    }, {})
-  } catch (err) {
-    _logger('Error getting process timing: %O', err)
-    return {}
-  }
-}
+// Note: The getProcessTiming function has been moved and enhanced
+// with additional statistics. See the implementation earlier in this file.
 
-/**
- * Get action timing metrics
- * @returns {Promise<Object>} Action timing metrics
- */
-export async function getActionTiming() {
-  if (!pool) return {}
-  
-  try {
-    const result = await pool.query(`
-      SELECT 
-        action as key, 
-        json_build_object(
-          'totalDuration', total_duration,
-          'count', count
-        ) as value
-      FROM ur_metrics_action_counts
-      ORDER BY count DESC
-    `)
-    
-    // Convert array of {key, value} to object
-    return result.rows.reduce((acc, row) => {
-      acc[row.key] = row.value
-      return acc
-    }, {})
-  } catch (err) {
-    _logger('Error getting action timing: %O', err)
-    return {}
-  }
-}
+// Note: The getActionTiming function has been moved and enhanced
+// with additional statistics. See the implementation earlier in this file.
 
 /**
  * Get the database pool for direct use
