@@ -144,9 +144,8 @@ function generateDashboardHtml() {
     <html>
     <head>
       <title>AO Router Metrics Dashboard</title>
-      <!-- No meta refresh tag - using AJAX for updates -->
+      <!-- Auto-refresh handled by JavaScript instead of meta tag -->
       <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-      <script src="https://cdn.jsdelivr.net/npm/luxon@3.4.3/build/global/luxon.min.js"></script>
       <style>
         body {
           font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -301,7 +300,7 @@ function generateDashboardHtml() {
           padding: 5px;
           width: 200px;
         }
-        .refresh-btn, .apply-btn {
+        .refresh-btn {
           background: #0066cc;
           color: white;
           border: none;
@@ -313,146 +312,43 @@ function generateDashboardHtml() {
         .refresh-btn.paused {
           background: #cc4400;
         }
-        .time-controls {
-          display: flex;
-          flex-wrap: wrap;
-          gap: 20px;
-          margin-bottom: 20px;
-          padding: 15px;
-          background: #f9f9f9;
-          border-radius: 4px;
-          border: 1px solid #eee;
-        }
-        .time-range-selector, .time-preset-selector, .interval-selector {
-          flex: 1;
-          min-width: 250px;
-        }
-        .time-range-inputs {
-          display: flex;
-          flex-wrap: wrap;
-          gap: 10px;
-          align-items: flex-end;
-        }
-        .time-input-group {
-          display: flex;
-          flex-direction: column;
-          gap: 5px;
-        }
-        .time-input-group input {
-          padding: 6px;
-          border: 1px solid #ddd;
-          border-radius: 3px;
-        }
-        .preset-buttons {
-          display: flex;
-          flex-wrap: wrap;
-          gap: 5px;
-        }
-        .time-preset {
-          background: #f2f2f2;
-          border: 1px solid #ddd;
-          border-radius: 3px;
-          padding: 5px 10px;
-          cursor: pointer;
-          font-size: 0.9em;
-        }
-        .time-preset.active {
-          background: #0066cc;
-          color: white;
-          border-color: #0055aa;
-        }
-        .interval-selector select {
-          padding: 6px;
-          border: 1px solid #ddd;
-          border-radius: 3px;
-          width: 100%;
-          max-width: 200px;
-        }
-        #loading-indicator {
-          display: none;
-          margin-left: 10px;
-          font-style: italic;
-          color: #666;
-        }
       </style>
     </head>
     <body>
       <h1>AO Router Metrics Dashboard</h1>
       <div class="timestamp">
         <span id="refresh-status">Auto-refreshes every 5 seconds</span> - 
-        Last updated: <span id="last-updated">' + new Date().toISOString() + '</span>
+        Last updated: <span id="last-updated">${new Date().toISOString()}</span>
         <button id="toggle-refresh" class="refresh-btn">Pause</button>
-        <span id="loading-indicator">Loading...</span>
       </div>
       
       <div class="stats-overview">
         <div class="stat-box">
-          <div class="stat-number">' + metrics.totalRequests + '</div>
+          <div class="stat-number">${metrics.totalRequests}</div>
           <div class="stat-label">Total Requests</div>
         </div>
         <div class="stat-box">
-          <div class="stat-number">' + Object.keys(metrics.processCounts).length + '</div>
+          <div class="stat-number">${Object.keys(metrics.processCounts).length}</div>
           <div class="stat-label">Unique Process IDs</div>
         </div>
         <div class="stat-box">
-          <div class="stat-number">' + Object.keys(metrics.actionCounts).length + '</div>
+          <div class="stat-number">${Object.keys(metrics.actionCounts).length}</div>
           <div class="stat-label">Different Actions</div>
         </div>
         <div class="stat-box">
-          <div class="stat-number">' + Object.keys(metrics.ipCounts).length + '</div>
+          <div class="stat-number">${metrics.ipCounts.length}</div>
           <div class="stat-label">Unique IPs</div>
         </div>
       </div>
       
       <div class="card">
         <h2>Traffic Overview</h2>
-        
-        <div class="time-controls">
-          <div class="time-range-selector">
-            <h3>Time Range</h3>
-            <div class="time-range-inputs">
-              <div class="time-input-group">
-                <label for="start-date">Start:</label>
-                <input type="datetime-local" id="start-date" name="start-date">
-              </div>
-              <div class="time-input-group">
-                <label for="end-date">End:</label>
-                <input type="datetime-local" id="end-date" name="end-date">
-              </div>
-              <button id="apply-time-range" class="apply-btn">Apply Range</button>
-            </div>
-          </div>
-          
-          <div class="time-preset-selector">
-            <h3>Quick Presets</h3>
-            <div class="preset-buttons">
-              <button class="time-preset" data-minutes="15">15m</button>
-              <button class="time-preset" data-minutes="30">30m</button>
-              <button class="time-preset active" data-hours="1">1h</button>
-              <button class="time-preset" data-hours="3">3h</button>
-              <button class="time-preset" data-hours="6">6h</button>
-              <button class="time-preset" data-hours="12">12h</button>
-              <button class="time-preset" data-hours="24">24h</button>
-              <button class="time-preset" data-days="3">3d</button>
-              <button class="time-preset" data-days="7">7d</button>
-            </div>
-          </div>
-          
-          <div class="interval-selector">
-            <h3>Time Interval</h3>
-            <select id="time-interval">
-              <option value="minute" selected>Minutes</option>
-              <option value="5minute">5 Minutes</option>
-              <option value="15minute">15 Minutes</option>
-              <option value="30minute">30 Minutes</option>
-              <option value="hour">Hours</option>
-              <option value="day">Days</option>
-            </select>
-          </div>
-        </div>
-        
         <div class="chart-container">
           <canvas id="timeSeriesChart"></canvas>
+        </div>
+        <div class="slider-container">
+          <input type="range" min="1" max="24" value="24" id="timeRangeSlider">
+          <div id="sliderValue">Last 24 hours</div>
         </div>
       </div>
       
@@ -479,7 +375,7 @@ function generateDashboardHtml() {
             </tr>
           </thead>
           <tbody>
-            ' + (recentRequestsHtml || '<tr><td colspan="6">No requests recorded yet</td></tr>') + '
+            ${recentRequestsHtml || '<tr><td colspan="6">No requests recorded yet</td></tr>'}
           </tbody>
         </table>
       </div>
@@ -498,7 +394,7 @@ function generateDashboardHtml() {
             </tr>
           </thead>
           <tbody>
-            ' + (processMetricsHtml || '<tr><td colspan="4">No process metrics recorded yet</td></tr>') + '
+            ${processMetricsHtml || '<tr><td colspan="4">No process metrics recorded yet</td></tr>'}
           </tbody>
         </table>
         <div class="chart-container">
@@ -520,7 +416,7 @@ function generateDashboardHtml() {
             </tr>
           </thead>
           <tbody>
-            ' + (actionMetricsHtml || '<tr><td colspan="3">No action metrics recorded yet</td></tr>') + '
+            ${actionMetricsHtml || '<tr><td colspan="3">No action metrics recorded yet</td></tr>'}
           </tbody>
         </table>
         <div class="chart-container">
@@ -540,7 +436,7 @@ function generateDashboardHtml() {
               </tr>
             </thead>
             <tbody>
-              ' + (ipMetricsHtml || '<tr><td colspan="2">No IP metrics recorded yet</td></tr>') + '
+              ${ipMetricsHtml || '<tr><td colspan="2">No IP metrics recorded yet</td></tr>'}
             </tbody>
           </table>
         </div>
@@ -555,39 +451,17 @@ function generateDashboardHtml() {
               </tr>
             </thead>
             <tbody>
-              ' + (referrerMetricsHtml || '<tr><td colspan="2">No referrer metrics recorded yet</td></tr>') + '
+              ${referrerMetricsHtml || '<tr><td colspan="2">No referrer metrics recorded yet</td></tr>'}
             </tbody>
           </table>
         </div>
       </div>
       
       <script>
-        // Initial data from server - this will be refreshed via AJAX
-        let timeLabels = ' + JSON.stringify(timeLabels) + ';
-        let timeSeriesData = ' + JSON.stringify(timeSeriesData) + ';
-        
-        // Store all metrics data for AJAX updates
-        let allMetricsData = {
-          recentRequests: ' + JSON.stringify(metrics.recentRequests) + ',
-          processCounts: ' + JSON.stringify(metrics.processCounts) + ',
-          actionCounts: ' + JSON.stringify(metrics.actionCounts) + ',
-          processTiming: ' + JSON.stringify(Object.entries(metrics.processTiming).reduce((acc, [processId, data]) => {
-            acc[processId] = {
-              ...data,
-              avgDuration: data.count > 0 ? data.totalDuration / data.count : 0
-            };
-            return acc;
-          }, {})) + ',
-          actionTiming: ' + JSON.stringify(Object.entries(metrics.actionTiming).reduce((acc, [action, data]) => {
-            acc[action] = {
-              ...data,
-              avgDuration: data.count > 0 ? data.totalDuration / data.count : 0
-            };
-            return acc;
-          }, {})) + ',
-          totalRequests: ' + (metrics.totalRequests || 0) + ',
-          timeSeriesData: ' + JSON.stringify(metrics.timeSeriesData) + '
-        };
+        // Initialize time series chart with most recent data on the right (index 0 is oldest, index 23 is newest)
+        // Important: we're keeping the original order of the arrays (oldest first, newest last)
+        const timeLabels = ${JSON.stringify(timeLabels)};
+        const timeSeriesData = ${JSON.stringify(timeSeriesData)};
         
         const timeCtx = document.getElementById('timeSeriesChart').getContext('2d');
         const timeSeriesChart = new Chart(timeCtx, {
@@ -769,172 +643,42 @@ function generateDashboardHtml() {
         const slider = document.getElementById('timeRangeSlider');
         const sliderValue = document.getElementById('sliderValue');
         
-        // Current time range settings
-        let currentTimeRange = {
-          start: new Date(Date.now() - 60 * 60 * 1000), // 1 hour ago (default view)
-          end: new Date(),
-          interval: 'minute' // Default interval for 1-hour view
-        };
+        // Initialize with full data range
+        let currentDisplayHours = 24;
         
-        // Initialize datetime pickers with current range
-        initDateTimePickers();
+        // Show proper time range initially - all 24 hours
+        // The full dataset is already in the right order (oldest first, newest last)
+        timeSeriesChart.data.labels = timeLabels;
+        timeSeriesChart.data.datasets[0].data = timeSeriesData;
+        timeSeriesChart.update();
         
-        // Show initial time range
-        updateChartWithTimeRange();
-        
-        // Time range selection functions
-        function initDateTimePickers() {
-          const startPicker = document.getElementById('start-date');
-          const endPicker = document.getElementById('end-date');
+        slider.addEventListener('input', function() {
+          const hours = parseInt(this.value);
+          currentDisplayHours = hours;
+          sliderValue.innerText = 'Last ' + hours + (hours == 1 ? ' hour' : ' hours');
           
-          // Format dates for datetime-local input
-          const formatDateForInput = (date) => {
-            return date.toISOString().slice(0, 16); // Format as YYYY-MM-DDTHH:MM
-          };
+          // When reducing hours, we want to keep the most recent N hours (remove oldest)
+          // Since our data is ordered from oldest (index 0) to newest (index 23), 
+          // we need to take a slice from the end of the array when reducing hours
+          const startIndex = timeLabels.length - hours; // Calculate where to start (to get the last N hours)
           
-          // Set initial values
-          startPicker.value = formatDateForInput(currentTimeRange.start);
-          endPicker.value = formatDateForInput(currentTimeRange.end);
-          
-          // Apply time range button
-          document.getElementById('apply-time-range').addEventListener('click', function() {
-            // Get values from pickers
-            const startDate = new Date(startPicker.value);
-            const endDate = new Date(endPicker.value);
-            
-            // Validate dates
-            if (startDate >= endDate) {
-              alert('Start date must be before end date');
-              return;
-            }
-            
-            // Update current time range
-            currentTimeRange.start = startDate;
-            currentTimeRange.end = endDate;
-            
-            // Update charts with new range
-            updateChartWithTimeRange();
-          });
-        }
-        
-        // Time preset buttons
-        document.querySelectorAll('.time-preset').forEach(button => {
-          button.addEventListener('click', function() {
-            // Clear active state from all buttons
-            document.querySelectorAll('.time-preset').forEach(b => b.classList.remove('active'));
-            
-            // Set this button as active
-            this.classList.add('active');
-            
-            // Calculate new time range based on preset
-            const now = new Date();
-            let startDate = new Date(now);
-            
-            if (this.dataset.minutes) {
-              startDate.setMinutes(now.getMinutes() - parseInt(this.dataset.minutes, 10));
-            } else if (this.dataset.hours) {
-              startDate.setHours(now.getHours() - parseInt(this.dataset.hours, 10));
-            } else if (this.dataset.days) {
-              startDate.setDate(now.getDate() - parseInt(this.dataset.days, 10));
-            }
-            
-            // Update time range
-            currentTimeRange.start = startDate;
-            currentTimeRange.end = now;
-            
-            // Update pickers
-            document.getElementById('start-date').value = startDate.toISOString().slice(0, 16);
-            document.getElementById('end-date').value = now.toISOString().slice(0, 16);
-            
-            // Update chart
-            updateChartWithTimeRange();
-          });
-        });
-        
-        // Interval selector
-        document.getElementById('time-interval').addEventListener('change', function() {
-          currentTimeRange.interval = this.value;
-          updateChartWithTimeRange();
-        });
-        
-        // Function to update chart based on time range
-        function updateChartWithTimeRange() {
-          // Extract time series data within range
-          const filteredData = processTimeSeriesData(allMetricsData.timeSeriesData, currentTimeRange);
-          
-          // Update chart
-          timeSeriesChart.data.labels = filteredData.labels;
-          timeSeriesChart.data.datasets[0].data = filteredData.values;
+          // Take the last 'hours' elements from the arrays (newest data)
+          timeSeriesChart.data.labels = timeLabels.slice(startIndex);
+          timeSeriesChart.data.datasets[0].data = timeSeriesData.slice(startIndex);
           timeSeriesChart.update();
-        }
+        });
         
-        // Process time series data based on time range and interval
-        function processTimeSeriesData(timeSeriesData, timeRange) {
-          // Convert timestamps to Date objects for comparison
-          const startTime = timeRange.start.getTime();
-          const endTime = timeRange.end.getTime();
-          
-          // Filter data within time range
-          let filteredData = timeSeriesData.filter(point => {
-            const pointTime = new Date(point.timestamp).getTime();
-            return pointTime >= startTime && pointTime <= endTime;
-          });
-          
-          // If no data in range, return empty arrays
-          if (filteredData.length === 0) {
-            return { labels: [], values: [] };
-          }
-          
-          // Sort by time (oldest first)
-          filteredData.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-          
-          // Extract labels and values based on interval
-          let labels = [];
-          let values = [];
-          
-          // Format labels based on interval
-          filteredData.forEach(point => {
-            const date = new Date(point.timestamp);
-            let label = '';
-            
-            switch(timeRange.interval) {
-              case 'minute':
-                label = date.getHours() + ':' + date.getMinutes().toString().padStart(2, '0');
-                break;
-              case '5minute':
-              case '15minute':
-              case '30minute':
-                label = date.getHours() + ':' + date.getMinutes().toString().padStart(2, '0');
-                break;
-              case 'hour':
-                label = date.getHours() + ':00';
-                break;
-              case 'day':
-                label = (date.getMonth()+1) + '/' + date.getDate();
-                break;
-              default:
-                label = date.toLocaleTimeString();
-            }
-            
-            labels.push(label);
-            values.push(point.totalRequests);
-          });
-          
-          return { labels, values };
-        }
-        
-        // AJAX-based refresh functionality
+        // Auto-refresh functionality
         let refreshInterval;
         let isRefreshing = true;
         const refreshButton = document.getElementById('toggle-refresh');
         const refreshStatus = document.getElementById('refresh-status');
         const lastUpdatedSpan = document.getElementById('last-updated');
-        const loadingIndicator = document.getElementById('loading-indicator');
         
         function startAutoRefresh() {
           refreshInterval = setInterval(function() {
             if (isRefreshing) {
-              fetchUpdatedMetrics();
+              window.location.reload();
             }
           }, 5000); // Refresh every 5 seconds
         }
@@ -946,232 +690,12 @@ function generateDashboardHtml() {
             refreshButton.textContent = 'Pause';
             refreshButton.classList.remove('paused');
             refreshStatus.textContent = 'Auto-refreshes every 5 seconds';
-            // Perform immediate refresh when resuming
-            fetchUpdatedMetrics();
           } else {
             refreshButton.textContent = 'Resume';
             refreshButton.classList.add('paused');
             refreshStatus.textContent = 'Auto-refresh paused';
           }
         });
-        
-        // Function to fetch updated metrics via AJAX
-        function fetchUpdatedMetrics() {
-          loadingIndicator.style.display = 'inline-block';
-          
-          // Create an API endpoint for fetching only metrics data
-          fetch('/dashboard/api/metrics')
-            .then(response => response.json())
-            .then(data => {
-              // Update the metrics data
-              allMetricsData = data;
-              
-              // Update UI with new data
-              updateDashboardWithNewData();
-              
-              // Update last updated timestamp
-              lastUpdatedSpan.textContent = new Date().toISOString();
-              loadingIndicator.style.display = 'none';
-            })
-            .catch(error => {
-              console.error('Error fetching metrics:', error);
-              loadingIndicator.style.display = 'none';
-            });
-        }
-        
-        // Function to update all dashboard elements with new data
-        function updateDashboardWithNewData() {
-          // Update time series chart
-          updateChartWithTimeRange();
-          
-          // Update total requests counters
-          updateStatCounters();
-          
-          // Update tables
-          updateRequestsTable();
-          updateProcessTable();
-          updateActionTable();
-          updateClientTables();
-        }
-        
-        function updateStatCounters() {
-          // Update stat counters
-          document.querySelectorAll('.stat-box').forEach(box => {
-            const statType = box.dataset.stat;
-            const numberEl = box.querySelector('.stat-number');
-            
-            if (statType === 'totalRequests') {
-              numberEl.textContent = allMetricsData.totalRequests;
-            } else if (statType === 'uniqueProcesses') {
-              numberEl.textContent = Object.keys(allMetricsData.processCounts).length;
-            } else if (statType === 'uniqueActions') {
-              numberEl.textContent = Object.keys(allMetricsData.actionCounts).length;
-            } else if (statType === 'uniqueIps') {
-              numberEl.textContent = allMetricsData.ipCounts?.length || 0;
-            }
-          });
-        }
-        
-        function updateRequestsTable() {
-          const tbody = document.querySelector('#requests-tab tbody');
-          if (!tbody || !allMetricsData.recentRequests) return;
-          
-          // Generate HTML for requests table
-          const recentRequestsHtml = allMetricsData.recentRequests.map((req, index) => {
-            // Create detailed dropdown content similar to original rendering
-            const details = allMetricsData.requestDetails?.[req.processId] || [];
-            const detail = details.length > 0 ? details[0] : null;
-            
-            // Create dropdown HTML similar to original
-            const detailsHtml = detail ? '
-              <div class="details-content">
-                <h4>Request Details</h4>
-                <table class="details-table">
-                  <tr><td>Method:</td><td>' + (detail.method || 'N/A') + '</td></tr>
-                  <tr><td>Path:</td><td>' + (detail.path || 'N/A') + '</td></tr>
-                  <tr><td>IP Address:</td><td>' + (detail.ip || 'N/A') + '</td></tr>
-                  <tr><td>User Agent:</td><td>' + (detail.userAgent || 'N/A') + '</td></tr>
-                  <tr><td>Referrer:</td><td>' + (detail.referer || 'N/A') + '</td></tr>
-                  <tr><td>Origin:</td><td>' + (detail.origin || 'N/A') + '</td></tr>
-                  <tr><td>Content Type:</td><td>' + (detail.contentType || 'N/A') + '</td></tr>
-                </table>
-              </div>
-            ' : '<div class="details-content">No additional details available</div>';
-            
-            return '
-              <tr>
-                <td>' + req.timestamp + '</td>
-                <td>
-                  <details>
-                    <summary>' + req.processId + '</summary>
-                    <div class="process-details">
-                      ' + detailsHtml + '
-                    </div>
-                  </details>
-                </td>
-                <td>' + (req.action || 'N/A') + '</td>
-                <td>' + req.ip + '</td>
-                <td>' + req.duration + 'ms</td>
-                <td>
-                  <button class="copy-btn" data-id="' + req.processId + '" title="Copy Process ID">
-                    Copy ID
-                  </button>
-                </td>
-              </tr>
-            ';
-          }).join('');
-          
-          // Update table content
-          tbody.innerHTML = recentRequestsHtml || '<tr><td colspan="6">No requests recorded yet</td></tr>';
-          
-          // Re-attach copy button listeners to newly created buttons
-          attachCopyButtonListeners();
-        }
-        
-        function updateProcessTable() {
-          const tbody = document.querySelector('#processes-tab tbody');
-          if (!tbody) return;
-          
-          // Generate HTML for process table similar to original rendering
-          const processMetricsHtml = Object.entries(allMetricsData.processCounts || {})
-            .sort((a, b) => b[1] - a[1]) // Sort by count descending
-            .map(([processId, count]) => {
-              const timing = allMetricsData.processTiming?.[processId] || { avgDuration: 0 };
-              return '
-                <tr>
-                  <td>
-                    <details>
-                      <summary>' + processId + '</summary>
-                      <div class="process-details">
-                        <h4>Process Request History</h4>
-                        <p>Historical data available in chart above</p>
-                      </div>
-                    </details>
-                  </td>
-                  <td>' + count + '</td>
-                  <td>' + (timing.avgDuration ? timing.avgDuration.toFixed(2) : '0.00') + 'ms</td>
-                  <td>
-                    <button class="copy-btn" data-id="' + processId + '" title="Copy Process ID">
-                      Copy ID
-                    </button>
-                  </td>
-                </tr>
-              ';
-            }).join('');
-            
-          // Update table
-          tbody.innerHTML = processMetricsHtml || '<tr><td colspan="4">No process metrics recorded yet</td></tr>';
-          
-          // Re-attach copy button listeners
-          attachCopyButtonListeners();
-        }
-        
-        function updateActionTable() {
-          const tbody = document.querySelector('#actions-tab tbody');
-          if (!tbody) return;
-          
-          // Generate action metrics HTML
-          const actionMetricsHtml = Object.entries(allMetricsData.actionCounts || {})
-            .sort((a, b) => b[1] - a[1]) // Sort by count descending
-            .map(([action, count]) => {
-              const timing = allMetricsData.actionTiming?.[action] || { avgDuration: 0 };
-              return '
-                <tr class="action-row" data-action="' + action + '">
-                  <td>' + action + '</td>
-                  <td>' + count + '</td>
-                  <td>' + (timing.avgDuration ? timing.avgDuration.toFixed(2) : '0.00') + 'ms</td>
-                </tr>
-              ';
-            }).join('');
-          
-          // Update table
-          tbody.innerHTML = actionMetricsHtml || '<tr><td colspan="3">No action metrics recorded yet</td></tr>';
-        }
-        
-        function updateClientTables() {
-          // Update IP table
-          const ipTbody = document.querySelector('#clients-tab .card:first-child tbody');
-          if (ipTbody && allMetricsData.ipCounts) {
-            const ipMetricsHtml = allMetricsData.ipCounts
-              .map(([ip, count]) => '
-                <tr>
-                  <td>' + ip + '</td>
-                  <td>' + count + '</td>
-                </tr>
-              ').join('');
-              
-            ipTbody.innerHTML = ipMetricsHtml || '<tr><td colspan="2">No IP metrics recorded yet</td></tr>';
-          }
-          
-          // Update referrer table
-          const refTbody = document.querySelector('#clients-tab .card:last-child tbody');
-          if (refTbody && allMetricsData.referrerCounts) {
-            const referrerMetricsHtml = allMetricsData.referrerCounts
-              .map(([referrer, count]) => '
-                <tr>
-                  <td>' + referrer + '</td>
-                  <td>' + count + '</td>
-                </tr>
-              ').join('');
-              
-            refTbody.innerHTML = referrerMetricsHtml || '<tr><td colspan="2">No referrer metrics recorded yet</td></tr>';
-          }
-        }
-        
-        function attachCopyButtonListeners() {
-          document.querySelectorAll('.copy-btn').forEach(btn => {
-            btn.addEventListener('click', function() {
-              const textToCopy = this.dataset.id;
-              navigator.clipboard.writeText(textToCopy).then(() => {
-                const originalText = this.innerText;
-                this.innerText = 'Copied!';
-                setTimeout(() => {
-                  this.innerText = originalText;
-                }, 1000);
-              });
-            });
-          });
-        }
         
         // Start auto-refresh when page loads
         startAutoRefresh();
@@ -1213,12 +737,11 @@ function generateDashboardHtml() {
 }
 
 /**
- * Mount dashboard routes on app
+ * Mount dashboard route on app
  */
 export function mountDashboard(app) {
-  _logger('Mounting dashboard routes')
+  _logger('Mounting dashboard route')
   
-  // Main dashboard HTML page
   app.get('/dashboard', (req, res) => {
     try {
       const html = generateDashboardHtml()
@@ -1227,18 +750,6 @@ export function mountDashboard(app) {
     } catch (err) {
       _logger('Error rendering dashboard: %O', err)
       res.status(500).send('Error rendering dashboard')
-    }
-  })
-  
-  // API endpoint for metrics data (for AJAX updates)
-  app.get('/dashboard/api/metrics', (req, res) => {
-    try {
-      // Get metrics data in JSON format
-      const metrics = getMetrics()
-      res.json(metrics)
-    } catch (err) {
-      _logger('Error fetching metrics data: %O', err)
-      res.status(500).json({ error: 'Error fetching metrics data' })
     }
   })
   
