@@ -53,10 +53,12 @@ export async function runMigrations() {
     // Check for critical columns we need
     const hasTimeReceived = await columnExists('metrics_requests', 'time_received')
     const hasTimestamp = await columnExists('metrics_requests', 'timestamp')
+    const hasRequestRaw = await columnExists('metrics_requests', 'request_raw')
     
-    _logger('Column status - time_received: %s, timestamp: %s', 
+    _logger('Column status - time_received: %s, timestamp: %s, request_raw: %s', 
       hasTimeReceived ? 'exists' : 'missing',
-      hasTimestamp ? 'exists' : 'missing')
+      hasTimestamp ? 'exists' : 'missing',
+      hasRequestRaw ? 'exists' : 'missing')
     
     // Add time_received column if it doesn't exist
     if (!hasTimeReceived) {
@@ -90,6 +92,16 @@ export async function runMigrations() {
         CREATE INDEX IF NOT EXISTS idx_metrics_time_received 
         ON metrics_requests(time_received)
       `)
+    }
+    
+    // Add request_raw column if it doesn't exist
+    if (!hasRequestRaw) {
+      _logger('Adding request_raw column to metrics_requests table')
+      await query(`
+        ALTER TABLE metrics_requests 
+        ADD COLUMN request_raw TEXT
+      `)
+      _logger('request_raw column added successfully')
     }
     
     _logger('Database migrations completed successfully')
