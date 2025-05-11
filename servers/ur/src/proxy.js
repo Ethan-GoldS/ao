@@ -99,32 +99,6 @@ export function proxyWith ({ aoUnit, hosts, surUrl, processToHost, ownerToHost }
             }
 
             _logger('Reverse Proxying process %s to host %s', processId, host)
-            
-            // Track when the proxy request starts for timing metrics
-            const proxyStartTime = Date.now()
-            
-            // Store original write and end methods to measure response time
-            const originalWrite = res.write
-            const originalEnd = res.end
-            
-            // Overwrite res.write
-            res.write = function(data) {
-              // Track timing from proxy start to first write
-              const proxyDuration = Date.now() - proxyStartTime
-              // Set a property that our metrics middleware can access
-              res.proxyDuration = proxyDuration
-              return originalWrite.apply(res, arguments)
-            }
-            
-            // Overwrite res.end
-            res.end = function(data) {
-              // Ensure we have timing data even if write wasn't called
-              if (!res.proxyDuration) {
-                res.proxyDuration = Date.now() - proxyStartTime
-              }
-              return originalEnd.apply(res, arguments)
-            }
-            
             /**
              * Reverse proxy the request to the underlying selected host.
              * If an error occurs, return the next iteration for our trampoline to invoke.
