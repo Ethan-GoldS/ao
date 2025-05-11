@@ -644,53 +644,8 @@ export async function insertRequestDetails(details) {
   }
 }
 
-/**
- * Update time series data for a request
- * @param {string} processId Process ID
- * @param {string} timestamp ISO timestamp string
- * @returns {Promise<boolean>} Success flag
- */
-export async function updateTimeSeriesData(processId, timestamp) {
-  if (!pool || !processId || !timestamp) return false
-  
-  try {
-    const requestTime = new Date(timestamp)
-    
-    // Round down to the nearest hour for consistent bucketing
-    const bucketTime = new Date(
-      requestTime.getFullYear(),
-      requestTime.getMonth(),
-      requestTime.getDate(),
-      requestTime.getHours(),
-      0, 0, 0
-    )
-    
-    // Update or insert time bucket
-    await pool.query(`
-      INSERT INTO ur_metrics_time_series(timestamp, hour, total_requests, process_counts)
-      VALUES($1, $2, 1, jsonb_build_object($3::text, 1))
-      ON CONFLICT (timestamp)
-      DO UPDATE SET
-        total_requests = ur_metrics_time_series.total_requests + 1,
-        process_counts = 
-          CASE
-            WHEN ur_metrics_time_series.process_counts ? $3::text THEN
-              jsonb_set(
-                ur_metrics_time_series.process_counts,
-                ARRAY[$3::text],
-                to_jsonb((ur_metrics_time_series.process_counts->>$3::text)::int + 1)
-              )
-            ELSE
-              ur_metrics_time_series.process_counts || jsonb_build_object($3::text, 1)
-          END
-    `, [bucketTime, bucketTime.getUTCHours(), processId])
-    
-    return true
-  } catch (err) {
-    _logger('Error updating time series data: %O', err)
-    return false
-  }
-}
+// Note: The updateTimeSeriesData function has been moved and enhanced
+// with action support. See the implementation further down in this file.
 
 /**
  * Increment total request count
