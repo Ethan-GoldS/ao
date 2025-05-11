@@ -10,30 +10,105 @@ import { config } from './config.js'
 
 const _logger = logger.child('database')
 
-// Default database location if not specified in config
-const DEFAULT_DB_PATH = './data/metrics.db'
+// Determine appropriate database path with fallbacks for different environments
+function getDatabasePath() {
+  // First try from config
+  let dbPath = config.metricsStoragePath;
+  
+  if (!dbPath) {
+    // Try standard locations with different fallbacks depending on platform
+    if (process.platform === 'win32') {
+      // Windows - use current directory
+      dbPath = './data/metrics.db';
+    } else {
+      // Linux/Unix - try multiple locations with permission checks
+      const possiblePaths = [
+        './data/metrics.db',                // Current directory
+        '/tmp/aorouter-metrics.db',        // System temp directory
+        path.join(process.env.HOME || '.', '.ao-router-metrics.db') // User home directory
+      ];
+      
+      // Find first writable path
+      for (const testPath of possiblePaths) {
+        const testDir = path.dirname(testPath);
+        try {
+          // Check if directory exists and is writable
+          if (fs.existsSync(testDir)) {
+            // Try to write a test file
+            const testFile = path.join(testDir, '.write-test');
+            fs.writeFileSync(testFile, 'test');
+            fs.unlinkSync(testFile); // Remove test file
+            dbPath = testPath;
+            break;
+          } else {
+            // Try to create directory
+            fs.mkdirSync(testDir, { recursive: true });
+            dbPath = testPath;
+            break;
+          }
+        } catch (e) {
+          _logger('Path %s is not writable, trying next option', testDir);
+          // Continue to next option
+        }
+      }
+    }
+  }
+  
+  // If we still don't have a path, use in-memory database as last resort
+  if (!dbPath) {
+    _logger('WARNING: No writable location found for SQLite database, using in-memory database');
+    return ':memory:';
+  }
+  
+  return dbPath;
+}
 
-// Get the database path from config or use default
-const DB_PATH = config.metricsStoragePath || DEFAULT_DB_PATH
+// Get appropriate database path
+const DB_PATH = getDatabasePath();
 
 // Create directory if it doesn't exist
-const dbDir = path.dirname(DB_PATH)
-if (!fs.existsSync(dbDir)) {
-  fs.mkdirSync(dbDir, { recursive: true })
-  _logger('Created database directory: %s', dbDir)
+if (DB_PATH !== ':memory:') {
+  const dbDir = path.dirname(DB_PATH);
+  try {
+    if (!fs.existsSync(dbDir)) {
+      fs.mkdirSync(dbDir, { recursive: true });
+      _logger('Created database directory: %s', dbDir);
+    }
+  } catch (err) {
+    _logger('Error creating database directory: %O', err);
+    // Continue - we'll handle the error during connection
+  }
 }
 
 // Initialize database connection
-let db
-try {
-  db = new BetterSqlite3(DB_PATH, { 
-    fileMustExist: false,
-    verbose: process.env.DEBUG ? console.log : null
-  })
-  _logger('Connected to SQLite database at %s', DB_PATH)
-} catch (err) {
-  _logger('Error connecting to SQLite database: %O', err)
-  throw err
+let db;
+let connectionAttempts = 0;
+const MAX_ATTEMPTS = 3;
+
+while (connectionAttempts < MAX_ATTEMPTS) {
+  try {
+    connectionAttempts++;
+    db = new BetterSqlite3(DB_PATH, { 
+      fileMustExist: false,
+      verbose: process.env.DEBUG ? console.log : null
+    });
+    _logger('Connected to SQLite database at %s', DB_PATH);
+    break; // Success, exit the loop
+  } catch (err) {
+    _logger('Attempt %d: Error connecting to SQLite database at %s: %O', 
+      connectionAttempts, DB_PATH, err);
+    
+    if (connectionAttempts >= MAX_ATTEMPTS) {
+      _logger('All connection attempts failed, falling back to in-memory database');
+      try {
+        db = new BetterSqlite3(':memory:');
+        _logger('Connected to in-memory SQLite database (WARNING: data will not persist)');
+      } catch (memErr) {
+        _logger('Fatal error: Could not even create in-memory database: %O', memErr);
+        throw memErr;
+      }
+    }
+  }
 }
 
 // Create tables if they don't exist
