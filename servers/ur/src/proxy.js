@@ -114,16 +114,17 @@ export function proxyWith ({ aoUnit, hosts, surUrl, processToHost, ownerToHost }
            *
            * See buffer option on https://www.npmjs.com/package/http-proxy#options
            */
-          // For POST/PUT with JSON body, ensure we have a complete body to send
+          // We should only use restreamBody if needed and leave buffer undefined otherwise
+          // http-proxy needs req to have pipe function and our Buffer object doesn't have that
           let buffer;
-          if (req.body && (req.method === 'POST' || req.method === 'PUT')) {
-            // If we already have the body parsed, prepare a buffer with the JSON content
-            buffer = Buffer.from(JSON.stringify(req.body));
-            _logger('Prepared buffer from parsed body, size: %d bytes', buffer.length);
-          } else if (restreamBody) {
-            // Use provided restream function if available
+          if (restreamBody) {
+            // Only use restreamBody if explicitly needed
             buffer = await restreamBody(req);
             _logger('Using provided restream buffer');
+          } else {
+            // Don't set buffer, let http-proxy use req directly
+            buffer = undefined;
+            _logger('Using request object directly for proxying');
           }
 
           const host = await determineHost({ processId, failoverAttempt })
@@ -143,12 +144,14 @@ export function proxyWith ({ aoUnit, hosts, surUrl, processToHost, ownerToHost }
              * If an error occurs, return the next iteration for our trampoline to invoke.
              */
             const isHttps = host.startsWith('https://')
-            // Set appropriate headers based on content
-            if (buffer && req.headers['content-type'] && req.headers['content-type'].includes('application/json')) {
-              if (!req.headers['content-length']) {
-                // Ensure content-length is set correctly for buffered content
-                req.headers['content-length'] = Buffer.isBuffer(buffer) ? buffer.length : Buffer.byteLength(buffer);
-                _logger('Set content-length header to %d for buffered request', req.headers['content-length']);
+            // Ensure content-length is set for JSON bodies
+            if (req.body && req.headers['content-type'] && req.headers['content-type'].includes('application/json')) {
+              const bodyStr = JSON.stringify(req.body);
+              const contentLength = Buffer.byteLength(bodyStr, 'utf8');
+              
+              if (!req.headers['content-length'] || parseInt(req.headers['content-length']) === 0) {
+                req.headers['content-length'] = contentLength.toString();
+                _logger('Set content-length header to %d for JSON request', contentLength);
               }
             }
             
