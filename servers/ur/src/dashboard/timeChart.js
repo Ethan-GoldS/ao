@@ -285,14 +285,26 @@ export function getTimeChartScript(rawTimeData) {
       // Create buckets for each time interval in the range
       const result = [];
       
-      // Calculate the start time (floor to nearest interval)
-      const startTime = new Date(sortedData[0].timestamp);
-      const endTime = new Date(sortedData[sortedData.length-1].timestamp);
+      // Use the actual selected time range rather than just the data range
+      // This ensures we show the full selected time range even if there's no data for some periods
+      const startTime = getStartDateTime();
+      const endTime = new Date(); // Current time
       
-      console.log('Data spans from', startTime, 'to', endTime);
+      console.log('Selected time range is from', startTime.toLocaleString(), 'to', endTime.toLocaleString());
+      console.log('Data available from', sortedData.length > 0 ? sortedData[0].timestamp.toLocaleString() : 'N/A', 
+                'to', sortedData.length > 0 ? sortedData[sortedData.length-1].timestamp.toLocaleString() : 'N/A');
       
-      // Create empty buckets for each interval
+      // Create regular, evenly-spaced buckets for the entire selected time range
       let currentTime = new Date(startTime);
+      
+      // Round down to the nearest interval boundary to ensure consistent buckets
+      currentTime = new Date(
+        Math.floor(currentTime.getTime() / increment) * increment
+      );
+      
+      console.log('Starting buckets from', currentTime.toLocaleString());
+      
+      // Create a bucket for each interval in the range
       while (currentTime <= endTime) {
         result.push({
           timestamp: new Date(currentTime),
@@ -301,6 +313,10 @@ export function getTimeChartScript(rawTimeData) {
         });
         currentTime = new Date(currentTime.getTime() + increment);
       }
+      
+      console.log('Created', result.length, 'time buckets spanning from',
+                result[0].timestamp.toLocaleString(), 'to',
+                result[result.length-1].timestamp.toLocaleString());
       
       // Add data points to appropriate buckets
       sortedData.forEach(point => {
