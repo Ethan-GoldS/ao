@@ -80,25 +80,7 @@ function normalizeTimestamp(date) {
   return typeof date === 'string' ? new Date(date) : date;
 }
 
-/**
- * Extract action from request body tags
- * @param {Object} body Request body
- * @returns {String|null} Action or null if not found
- */
-export function extractAction(body) {
-  try {
-    if (!body || !body.Tags) return null;
-    
-    const actionTag = body.Tags.find(tag => 
-      tag.name === 'Action' || tag.name === 'action'
-    );
-    
-    return actionTag ? actionTag.value : null;
-  } catch (err) {
-    _logger('Error extracting action from request body: %O', err);
-    return null;
-  }
-}
+// Second extractAction function removed - was a duplicate
 
 /**
  * Start tracking a request
