@@ -8,6 +8,26 @@ import { logger } from '../logger.js'
 const _logger = logger.child('migration')
 
 /**
+ * Check if an index exists
+ * @param {String} indexName Name of the index to check
+ * @returns {Promise<Boolean>} True if index exists, false otherwise
+ */
+async function indexExists(indexName) {
+  try {
+    const result = await query(`
+      SELECT indexname 
+      FROM pg_indexes 
+      WHERE indexname = $1
+    `, [indexName])
+    
+    return result.rows.length > 0
+  } catch (error) {
+    _logger('Error checking index existence: %O', error)
+    return false
+  }
+}
+
+/**
  * Check if a column exists in a table
  * @param {String} tableName Name of the table to check
  * @param {String} columnName Name of the column to check
@@ -127,6 +147,36 @@ export async function runMigrations() {
         ADD COLUMN response_body TEXT
       `)
       _logger('response_body column added successfully')
+    }
+
+    // Add support for traffic overview functionality
+    try {
+      _logger('Adding traffic overview support...')
+      
+      // Create or check index on time_received
+      const timeReceivedIndexExists = await indexExists('idx_metrics_time_received')
+      if (!timeReceivedIndexExists) {
+        _logger('Creating index on time_received for better performance')
+        await query(`
+          CREATE INDEX idx_metrics_time_received 
+          ON metrics_requests(time_received)
+        `)
+      }
+      
+      // Create compound index on time_received and process_id if it doesn't exist
+      const compoundIndexExists = await indexExists('idx_metrics_time_process')
+      if (!compoundIndexExists) {
+        _logger('Creating compound index on time_received and process_id')
+        await query(`
+          CREATE INDEX idx_metrics_time_process 
+          ON metrics_requests(time_received, process_id)
+        `)
+      }
+      
+      _logger('Traffic overview support added successfully')
+    } catch (trafficErr) {
+      _logger('Warning: Error setting up traffic overview support: %O', trafficErr)
+      // Continue execution, not a critical error
     }
     
     _logger('Database migrations completed successfully')

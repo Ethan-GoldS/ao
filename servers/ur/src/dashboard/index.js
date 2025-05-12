@@ -3,7 +3,7 @@
  * Imports and assembles all dashboard components
  */
 import { getDashboardStyles } from './styles.js';
-import { initializeTimeControls, getTimeChartScript } from './timeChart.js';
+import { generateTrafficOverviewHtml, getTrafficOverviewScript, getTrafficOverviewStyles } from './trafficOverview.js';
 import { 
   generateRecentRequestsTable, 
   generateProcessMetricsTable, 
@@ -44,7 +44,7 @@ export function generateDashboardHtml(metrics) {
   // Generate each section of the dashboard
   const lastUpdated = new Date().toISOString();
   const refreshControls = generateRefreshControls(lastUpdated);
-  const timeControls = initializeTimeControls(metrics.timeSeriesData);
+  const trafficOverviewHtml = generateTrafficOverviewHtml();
   const recentRequestsTable = generateRecentRequestsTable(metrics.recentRequests, metrics.requestDetails);
   const processMetricsTable = generateProcessMetricsTable(metrics);
   const actionMetricsTable = generateActionMetricsTable(metrics);
@@ -74,7 +74,7 @@ export function generateDashboardHtml(metrics) {
   
   // Get all JavaScript for the dashboard
   const dashboardScripts = `
-    ${getTimeChartScript(metrics.timeSeriesData)}
+    ${getTrafficOverviewScript()}
     
     // Process chart
     const processLabels = ${JSON.stringify(topProcessIds.map(id => id.substring(0, 8) + '...'))};        
@@ -206,9 +206,6 @@ export function generateDashboardHtml(metrics) {
     ${getFilterScript()}
     
     ${getRefreshControlsScript()}
-    
-    // Initialize the chart
-    initializeTimeChart();
   `;
   
   // Assemble the complete HTML
@@ -221,6 +218,7 @@ export function generateDashboardHtml(metrics) {
       <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
       <style>
         ${getDashboardStyles()}
+        ${getTrafficOverviewStyles()}
       </style>
     </head>
     <body>
@@ -231,7 +229,7 @@ export function generateDashboardHtml(metrics) {
       
       <div class="card">
         <h2>Traffic Overview</h2>
-        ${timeControls}
+        ${trafficOverviewHtml}
       </div>
       
       <div class="tabs">
