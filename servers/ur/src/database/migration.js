@@ -55,12 +55,14 @@ export async function runMigrations() {
     const hasTimestamp = await columnExists('metrics_requests', 'timestamp')
     const hasRequestRaw = await columnExists('metrics_requests', 'request_raw')
     const hasResponseBody = await columnExists('metrics_requests', 'response_body')
+    const hasTrackingId = await columnExists('metrics_requests', 'tracking_id')
     
-    _logger('Column status - time_received: %s, timestamp: %s, request_raw: %s, response_body: %s', 
+    _logger('Column status - time_received: %s, timestamp: %s, request_raw: %s, response_body: %s, tracking_id: %s', 
       hasTimeReceived ? 'exists' : 'missing',
       hasTimestamp ? 'exists' : 'missing',
       hasRequestRaw ? 'exists' : 'missing',
-      hasResponseBody ? 'exists' : 'missing')
+      hasResponseBody ? 'exists' : 'missing',
+      hasTrackingId ? 'exists' : 'missing')
     
     // Add time_received column if it doesn't exist
     if (!hasTimeReceived) {
@@ -114,6 +116,44 @@ export async function runMigrations() {
         ADD COLUMN response_body TEXT
       `)
       _logger('response_body column added successfully')
+    }
+    
+    // Add tracking_id column if it doesn't exist
+    if (!hasTrackingId) {
+      _logger('Adding tracking_id column to metrics_requests table')
+      await query(`
+        ALTER TABLE metrics_requests 
+        ADD COLUMN tracking_id TEXT
+      `)
+      _logger('tracking_id column added successfully')
+    }
+    
+    // Force both timestamp and time_received to exist
+    // This addresses the error in the logs
+    if (!hasTimestamp) {
+      _logger('Adding timestamp column to metrics_requests table')
+      await query(`
+        ALTER TABLE metrics_requests 
+        ADD COLUMN timestamp TIMESTAMPTZ
+      `)
+      
+      // If time_received exists, copy values to timestamp
+      if (hasTimeReceived) {
+        _logger('Copying time_received values to timestamp')
+        await query(`
+          UPDATE metrics_requests 
+          SET timestamp = time_received 
+          WHERE timestamp IS NULL
+        `)
+      } else {
+        // Set timestamp to current time
+        _logger('Setting timestamp to current time for existing records')
+        await query(`
+          UPDATE metrics_requests 
+          SET timestamp = NOW() 
+          WHERE timestamp IS NULL
+        `)
+      }
     }
     
     _logger('Database migrations completed successfully')

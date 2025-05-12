@@ -55,8 +55,8 @@ export function metricsMiddleware() {
     // Get process ID from query params
     const processId = req.query['process-id'] || null;
     
-    // Create a unique request identifier
-    const requestId = `${processId}-${req.method}-${req.path}-${Date.now()}`;
+    // Create a unique request identifier - we'll use this as the tracking ID
+    const trackingId = `${processId || 'unknown'}-${req.method}-${req.path}-${Date.now()}`;
     
     // PREVENT DUPLICATE TRACKING: Check if we've already seen this exact request recently
     if (processId) {
@@ -67,7 +67,8 @@ export function metricsMiddleware() {
       
       if (lastTracked && (Date.now() - lastTracked < 1000)) {
         // This appears to be a duplicate request (same process, method, path within 1 second)
-        _logger('Skipping duplicate metrics tracking for %s (already tracked %dms ago)', processId, Date.now() - lastTracked);
+        // Use more concise logging
+        _logger('Skipping duplicate %s', processId);
         return next();
       }
       
@@ -193,9 +194,8 @@ export function metricsMiddleware() {
     const hrstart = process.hrtime ? process.hrtime() : null;
     const startTimeMs = Date.now();
     
-    // Log the request start with detailed timing information
-    _logger('Request tracking started for process %s at %d, path: %s, method: %s', 
-      processId, startTimeMs, req.path, req.method);
+    // Use more concise logging to reduce verbosity
+    _logger('Track %s %s', processId, req.method);
     
     // Start tracking request for performance metrics
     const tracking = {
@@ -206,7 +206,9 @@ export function metricsMiddleware() {
       path: req.path, // Include path for better diagnostics
       method: req.method, // Include method for better diagnostics
       rawBody: rawRequestData, // Include raw request data in tracking
-      timeCreated: new Date().toISOString() // Exact ISO timestamp for debugging
+      timeCreated: new Date().toISOString(), // Exact ISO timestamp for debugging
+      // Include the tracking ID we created earlier
+      trackingId: trackingId
     };
     
     // Capture original end method to intercept when response is sent
@@ -244,9 +246,8 @@ export function metricsMiddleware() {
           durationType = 'suspiciously-long';
         }
         
-        // Log detailed timing information
-        _logger('Request timing for %s: start=%d, end=%d, duration=%dms, type=%s, path=%s', 
-          tracking.processId, tracking.startTime, endTimeMs, duration, durationType, tracking.path);
+        // Use concise logging
+        _logger('Complete %s %dms', tracking.processId, duration);
         
         // Get raw action from response data if possible (advanced attempt)
         let action = null;

@@ -169,12 +169,16 @@ export function generateRecentRequestsTable(recentRequests, requestDetails) {
     // Format the timestamp properly
     const formattedTimestamp = formatTimestamp(req.time_received || req.timestamp);
     
+    // Get tracking ID if available
+    const trackingId = req.tracking_id || 'Not available';
+    
     // Create detailed dropdown content
     const detailsHtml = `
       <div class="details-content">
         <h4>Request Details</h4>
         <table class="details-table">
           <tr><td>Process ID:</td><td><code>${req.process_id || req.processId || 'N/A'}</code></td></tr>
+          <tr><td>Tracking ID:</td><td><code>${trackingId}</code></td></tr>
           <tr><td>Time Received:</td><td>${formattedTimestamp}</td></tr>
           <tr><td>Method:</td><td>${req.request_method || detail?.method || 'N/A'}</td></tr>
           <tr><td>Path:</td><td>${req.request_path || detail?.path || 'N/A'}</td></tr>
