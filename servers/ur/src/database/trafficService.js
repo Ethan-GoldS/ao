@@ -38,17 +38,13 @@ export async function getTrafficData(options) {
     // Convert interval to PostgreSQL interval format
     const pgInterval = convertToPgInterval(interval);
     
-    // Prepare base query with flexible time bucketing
+    // Prepare new query using proper bucketing first, then counting actions
     let sql = `
-      SELECT 
-        time_bucket($1, time_received) AS bucket_time,
-        COUNT(*) AS request_count,
-        jsonb_object_agg(COALESCE(action, 'unknown'), action_count) AS action_counts
-      FROM (
+      WITH time_buckets AS (
         SELECT 
-          time_received,
+          time_bucket($1, time_received) AS bucket_time,
           action,
-          COUNT(*) AS action_count
+          process_id
         FROM metrics_requests
         WHERE time_received BETWEEN $2 AND $3
     `;
@@ -60,10 +56,24 @@ export async function getTrafficData(options) {
       params.push(`%${processIdFilter}%`);
     }
 
-    // Complete the query with grouping and ordering
+    // Complete the query with better aggregation
     sql += `
-        GROUP BY time_received, action
-      ) AS detailed
+      )
+      SELECT 
+        bucket_time,
+        COUNT(*) AS request_count,
+        jsonb_object_agg(
+          COALESCE(action, 'unknown'),
+          COALESCE(count_per_action, 0)
+        ) AS action_counts
+      FROM (
+        SELECT 
+          bucket_time,
+          action,
+          COUNT(*) AS count_per_action
+        FROM time_buckets
+        GROUP BY bucket_time, action
+      ) AS action_counts_per_bucket
       GROUP BY bucket_time
       ORDER BY bucket_time ASC
     `;
