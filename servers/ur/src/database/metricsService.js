@@ -546,12 +546,33 @@ async function processTimeSeriesResults(result, hours) {
  */
 export async function getTotalStats() {
   try {
+    // Check which column to use for timestamp data
+    const columns = await query(
+      `SELECT column_name 
+       FROM information_schema.columns 
+       WHERE table_name = 'metrics_requests'`
+    );
+    
+    const columnNames = columns.rows.map(row => row.column_name);
+    let timeColumn = 'time_received';
+    
+    // Fall back to other columns if time_received doesn't exist
+    if (!columnNames.includes('time_received')) {
+      if (columnNames.includes('time_completed')) {
+        timeColumn = 'time_completed';
+      } else if (columnNames.includes('created_at')) {
+        timeColumn = 'created_at';
+      }
+    }
+    
+    _logger('Using %s column for total stats time data', timeColumn);
+    
     const result = await query(
       `SELECT 
          COUNT(*) as total_requests,
          COUNT(DISTINCT process_id) as unique_processes,
          COUNT(DISTINCT request_ip) as unique_ips,
-         MIN(timestamp) as start_time
+         MIN(${timeColumn}) as start_time
        FROM metrics_requests`
     )
 
