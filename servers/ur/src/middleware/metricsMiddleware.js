@@ -31,50 +31,15 @@ function getClientIp(req) {
 /**
  * Create middleware to collect metrics for all requests
  */
-// Cache of already tracked requests to prevent duplicates
-const trackedRequests = new Map();
-
-// Cleanup old entries from the tracked requests map
-setInterval(() => {
-  const now = Date.now();
-  trackedRequests.forEach((timestamp, key) => {
-    // Remove entries older than 30 seconds
-    if (now - timestamp > 30000) {
-      trackedRequests.delete(key);
-    }
-  });
-}, 60000); // Run cleanup every minute
-
 export function metricsMiddleware() {
   return (req, res, next) => {
     // Skip tracking for dashboard requests to avoid recursion
     if (req.path === '/dashboard' || req.path.startsWith('/new-dashboard')) {
       return next()
     }
-    
+
     // Get process ID from query params
     const processId = req.query['process-id'] || null;
-    
-    // Create a unique request identifier - we'll use this as the tracking ID
-    const trackingId = `${processId || 'unknown'}-${req.method}-${req.path}-${Date.now()}`;
-    
-    // PREVENT DUPLICATE TRACKING: Check if we've already seen this exact request recently
-    if (processId) {
-      // For requests to the same process in quick succession, we need more granular tracking
-      // Use a short window (1 second) to detect and prevent duplicates
-      const recentKey = `${processId}-${req.method}-${req.path}`;
-      const lastTracked = trackedRequests.get(recentKey);
-      
-      if (lastTracked && (Date.now() - lastTracked < 1000)) {
-        // This appears to be a duplicate request (same process, method, path within 1 second)
-        // Use more concise logging
-        _logger('Skipping duplicate %s', processId);
-        return next();
-      }
-      
-      // Mark this request as tracked
-      trackedRequests.set(recentKey, Date.now());
-    }
     
     // Get proper client IP
     const clientIp = getClientIp(req);
@@ -190,25 +155,12 @@ export function metricsMiddleware() {
     // Store request details for dashboard
     recordRequestDetails(requestDetails);
     
-    // Record the precise start time with high-resolution timer if available
-    const hrstart = process.hrtime ? process.hrtime() : null;
-    const startTimeMs = Date.now();
-    
-    // Use more concise logging to reduce verbosity
-    _logger('Track %s %s', processId, req.method);
-    
     // Start tracking request for performance metrics
     const tracking = {
-      startTime: startTimeMs,
-      hrtimeStart: hrstart, // Track high-resolution time if available
+      startTime: Date.now(),
       processId,
       ip: clientIp,
-      path: req.path, // Include path for better diagnostics
-      method: req.method, // Include method for better diagnostics
-      rawBody: rawRequestData, // Include raw request data in tracking
-      timeCreated: new Date().toISOString(), // Exact ISO timestamp for debugging
-      // Include the tracking ID we created earlier
-      trackingId: trackingId
+      rawBody: rawRequestData // Include raw request data in tracking
     };
     
     // Capture original end method to intercept when response is sent
@@ -217,37 +169,8 @@ export function metricsMiddleware() {
     // Override end method to collect metrics before completing the response
     res.end = function(...args) {
       try {
-        // Record end time with precise timing
-        const endTimeMs = Date.now();
-        
-        // Calculate duration with fallbacks and safeguards
-        let duration = 0;
-        let durationType = 'standard';
-        
-        // First try high-resolution timer for highest accuracy
-        if (tracking.hrtimeStart && process.hrtime) {
-          const hrend = process.hrtime(tracking.hrtimeStart);
-          duration = Math.round((hrend[0] * 1000) + (hrend[1] / 1000000)); // Convert to ms
-          durationType = 'high-resolution';
-        } else {
-          // Fall back to standard Date.now() calculation
-          duration = endTimeMs - tracking.startTime;
-          durationType = 'standard';
-        }
-        
-        // Apply sanity checks on duration
-        if (duration <= 0) {
-          _logger('WARNING: Detected suspicious 0ms duration for %s - forcing minimum duration', tracking.processId);
-          // Force a minimum duration to prevent 0ms entries
-          duration = 1;
-          durationType = 'forced-minimum';
-        } else if (duration > 60000) { // Over 1 minute seems suspect
-          _logger('WARNING: Unusually long duration detected: %dms for %s', duration, tracking.processId);
-          durationType = 'suspiciously-long';
-        }
-        
-        // Use concise logging
-        _logger('Complete %s %dms', tracking.processId, duration);
+        // Measure request duration
+        const duration = Date.now() - tracking.startTime;
         
         // Get raw action from response data if possible (advanced attempt)
         let action = null;

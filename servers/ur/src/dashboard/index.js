@@ -3,7 +3,7 @@
  * Imports and assembles all dashboard components
  */
 import { getDashboardStyles } from './styles.js';
-import { generateTrafficInsightsHtml, getTrafficInsightsScript, getTrafficInsightsStyles } from './trafficInsights.js';
+import { initializeTimeControls, getTimeChartScript } from './timeChart.js';
 import { 
   generateRecentRequestsTable, 
   generateProcessMetricsTable, 
@@ -35,26 +35,16 @@ export function generateDashboardHtml(metrics) {
   // Add top process IDs to metrics
   metrics.topProcessIds = topProcessIds;
   
-  // Ensure timeSeriesData exists to prevent errors
-  if (!metrics.timeSeriesData) {
-    metrics.timeSeriesData = [];
-  }
-  
-  // Get time labels for charts with proper null checks
-  metrics.timeLabels = Array.isArray(metrics.timeSeriesData) ? 
-    metrics.timeSeriesData.map(bucket => {
-      if (bucket && bucket.timestamp) {
-        const date = new Date(bucket.timestamp);
-        return `${date.getHours()}:${String(date.getMinutes()).padStart(2, '0')}`;
-      }
-      return 'N/A';
-    }) : [];
+  // Get time labels for charts
+  metrics.timeLabels = metrics.timeSeriesData.map(bucket => {
+    const date = new Date(bucket.timestamp);
+    return `${date.getHours()}:${String(date.getMinutes()).padStart(2, '0')}`;
+  });
   
   // Generate each section of the dashboard
   const lastUpdated = new Date().toISOString();
   const refreshControls = generateRefreshControls(lastUpdated);
-  // Use our new traffic insights component instead of the old time chart
-  const trafficInsights = generateTrafficInsightsHtml(metrics.timeSeriesData);
+  const timeControls = initializeTimeControls(metrics.timeSeriesData);
   const recentRequestsTable = generateRecentRequestsTable(metrics.recentRequests, metrics.requestDetails);
   const processMetricsTable = generateProcessMetricsTable(metrics);
   const actionMetricsTable = generateActionMetricsTable(metrics);
@@ -84,7 +74,7 @@ export function generateDashboardHtml(metrics) {
   
   // Get all JavaScript for the dashboard
   const dashboardScripts = `
-    ${getTrafficInsightsScript(metrics.timeSeriesData)}
+    ${getTimeChartScript(metrics.timeSeriesData)}
     
     // Process chart
     const processLabels = ${JSON.stringify(topProcessIds.map(id => id.substring(0, 8) + '...'))};        
@@ -217,21 +207,20 @@ export function generateDashboardHtml(metrics) {
     
     ${getRefreshControlsScript()}
     
-    // The chart will initialize automatically through its own DOMContentLoaded event
+    // Initialize the chart
+    initializeTimeChart();
   `;
   
   // Assemble the complete HTML
   return `
     <!DOCTYPE html>
-    <html lang="en">
+    <html>
     <head>
-      <meta charset="UTF-8">
-      <meta name="viewport" content="width=device-width, initial-scale=1.0">
       <title>AO Router Metrics Dashboard</title>
+      <!-- Auto-refresh handled by JavaScript instead of meta tag -->
       <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
       <style>
         ${getDashboardStyles()}
-        ${getTrafficInsightsStyles()}
       </style>
     </head>
     <body>
@@ -240,35 +229,33 @@ export function generateDashboardHtml(metrics) {
       
       ${statsOverview}
       
-      <div class="dashboard-container">
-        <!-- New Traffic Insights Component -->
-        <div class="card">
-          <h2>Traffic Insights</h2>
-          ${trafficInsights}
-        </div>
-        
-        <div class="tabs">
-          <div class="tab active" data-tab="requests">Recent Requests</div>
-          <div class="tab" data-tab="processes">Process Metrics</div>
-          <div class="tab" data-tab="actions">Action Metrics</div>
-          <div class="tab" data-tab="clients">Client Metrics</div>
-        </div>
-        
-        <div class="tab-content active" id="requests-tab">
-          ${recentRequestsTable}
-        </div>
-        
-        <div class="tab-content" id="processes-tab">
-          ${processMetricsTable}
-        </div>
-        
-        <div class="tab-content" id="actions-tab">
-          ${actionMetricsTable}
-        </div>
-        
-        <div class="tab-content" id="clients-tab">
-          ${clientMetricsTable}
-        </div>
+      <div class="card">
+        <h2>Traffic Overview</h2>
+        ${timeControls}
+      </div>
+      
+      <div class="tabs">
+        <div class="tab active" data-tab="requests">Recent Requests</div>
+        <div class="tab" data-tab="processes">Process Metrics</div>
+        <div class="tab" data-tab="actions">Action Metrics</div>
+        <div class="tab" data-tab="clients">Client Metrics</div>
+      </div>
+      
+      <div class="tab-content active" id="requests-tab">
+        ${recentRequestsTable}
+      </div>
+      
+      <div class="tab-content" id="processes-tab">
+        ${processMetricsTable}
+      </div>
+      
+      <div class="tab-content" id="actions-tab">
+        ${actionMetricsTable}
+      </div>
+      
+      <div class="tab-content" id="clients-tab">
+        ${clientMetricsTable}
+      </div>
       
       <script>
         ${dashboardScripts}

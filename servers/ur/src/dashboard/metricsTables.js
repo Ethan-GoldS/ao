@@ -63,27 +63,8 @@ function formatJsonForDisplay(jsonObj) {
 }
 
 export function generateRecentRequestsTable(recentRequests, requestDetails) {
-  // Filter out invalid records before processing
-  const validRequests = recentRequests.filter(req => {
-    // Check for minimum data quality requirements
-    if (!req.processId) return false;
-    
-    // Filter out 0ms records that also have no method/path - these are likely invalid
-    if (req.duration === 0 && (req.method === 'unknown' || !req.method) && (req.path === 'unknown' || !req.path)) {
-      return false;
-    }
-    
-    // Another strong signal of an invalid record is 0ms with no request body
-    if (req.duration === 0 && !req.request_body && !req.request_raw && !req.rawBody) {
-      return false;
-    }
-    
-    // Keep records with valid data
-    return true;
-  });
-  
   // Generate recent requests table with dropdowns for details
-  const recentRequestsHtml = validRequests.map((req, index) => {
+  const recentRequestsHtml = recentRequests.map((req, index) => {
     // Try to get request details for this process ID
     const details = requestDetails[req.processId] || [];
     const detail = details.length > 0 ? details[0] : null;
@@ -169,16 +150,12 @@ export function generateRecentRequestsTable(recentRequests, requestDetails) {
     // Format the timestamp properly
     const formattedTimestamp = formatTimestamp(req.time_received || req.timestamp);
     
-    // For legacy records, we might not have a tracking ID since it was just added
-    const hasTrackingId = req.tracking_id && req.tracking_id !== 'null' && req.tracking_id !== 'undefined';
-    
     // Create detailed dropdown content
     const detailsHtml = `
       <div class="details-content">
         <h4>Request Details</h4>
         <table class="details-table">
           <tr><td>Process ID:</td><td><code>${req.process_id || req.processId || 'N/A'}</code></td></tr>
-          ${hasTrackingId ? `<tr><td>Tracking ID:</td><td><code>${req.tracking_id}</code></td></tr>` : ''}
           <tr><td>Time Received:</td><td>${formattedTimestamp}</td></tr>
           <tr><td>Method:</td><td>${req.request_method || detail?.method || 'N/A'}</td></tr>
           <tr><td>Path:</td><td>${req.request_path || detail?.path || 'N/A'}</td></tr>
