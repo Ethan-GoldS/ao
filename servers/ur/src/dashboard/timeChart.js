@@ -92,13 +92,24 @@ export function initializeTimeControls(timeSeriesData, topProcessIds = []) {
             <div class="interval-selector">
               <label for="intervalSelector">Interval:</label>
               <select id="intervalSelector">
-                <option value="minute">Minute</option>
+                <!-- Fine-grained intervals -->
+                <option value="5sec">5 Seconds</option>
+                <option value="10sec">10 Seconds</option>
+                <option value="30sec">30 Seconds</option>
+                <option value="minute">1 Minute</option>
                 <option value="5min">5 Minutes</option>
                 <option value="10min" selected>10 Minutes</option>
                 <option value="15min">15 Minutes</option>
                 <option value="30min">30 Minutes</option>
-                <option value="hour">Hourly</option>
-                <option value="day">Daily</option>
+                
+                <!-- Coarser intervals -->
+                <option value="hour">1 Hour</option>
+                <option value="2hour">2 Hours</option>
+                <option value="6hour">6 Hours</option>
+                <option value="12hour">12 Hours</option>
+                <option value="day">1 Day</option>
+                <option value="week">1 Week</option>
+                <option value="month">1 Month</option>
               </select>
             </div>
             
@@ -141,13 +152,23 @@ export function getTimeChartScript(rawTimeData) {
     
     // Useful constants for time interval conversions
     const timeIntervals = {
-      'minute': { ms: 60 * 1000, displayName: 'Minute' },
+      // Fine-grained intervals
+      '5sec': { ms: 5 * 1000, displayName: '5 Seconds' },
+      '10sec': { ms: 10 * 1000, displayName: '10 Seconds' },
+      '30sec': { ms: 30 * 1000, displayName: '30 Seconds' },
+      'minute': { ms: 60 * 1000, displayName: '1 Minute' },
       '5min': { ms: 5 * 60 * 1000, displayName: '5 Minutes' },
       '10min': { ms: 10 * 60 * 1000, displayName: '10 Minutes' },
       '15min': { ms: 15 * 60 * 1000, displayName: '15 Minutes' },
       '30min': { ms: 30 * 60 * 1000, displayName: '30 Minutes' },
-      'hour': { ms: 60 * 60 * 1000, displayName: 'Hour' },
-      'day': { ms: 24 * 60 * 60 * 1000, displayName: 'Day' },
+      // Coarser intervals
+      'hour': { ms: 60 * 60 * 1000, displayName: '1 Hour' },
+      '2hour': { ms: 2 * 60 * 60 * 1000, displayName: '2 Hours' },
+      '6hour': { ms: 6 * 60 * 60 * 1000, displayName: '6 Hours' },
+      '12hour': { ms: 12 * 60 * 60 * 1000, displayName: '12 Hours' },
+      'day': { ms: 24 * 60 * 60 * 1000, displayName: '1 Day' },
+      'week': { ms: 7 * 24 * 60 * 60 * 1000, displayName: '1 Week' },
+      'month': { ms: 30 * 24 * 60 * 60 * 1000, displayName: '1 Month' },
     };
     
     // Log out some information about the data range loaded
@@ -327,7 +348,10 @@ export function getTimeChartScript(rawTimeData) {
     // Fetch fresh data from the server based on current filters
     async function fetchFilteredData() {
       // Display loading state
-      document.querySelector('.chart-container').classList.add('loading');
+      const chartContainer = document.querySelector('.chart-container');
+      if (chartContainer) {
+        chartContainer.classList.add('loading');
+      }
       
       // Get date range from pickers
       const startDate = getStartDateTime();
@@ -354,7 +378,7 @@ export function getTimeChartScript(rawTimeData) {
           throw new Error(`Server returned ${response.status}: ${response.statusText}`);
         }
         
-        // We need to parse the HTML response and extract the updated chart data
+        // Parse the HTML response and extract the updated chart data
         const html = await response.text();
         const parser = new DOMParser();
         const doc = parser.parseFromString(html, 'text/html');
@@ -364,18 +388,29 @@ export function getTimeChartScript(rawTimeData) {
         let newTimeSeriesData = [];
         
         for (const script of scriptTags) {
+          if (!script.textContent) continue;
+          
           const scriptContent = script.textContent;
           if (scriptContent.includes('rawTimeData =')) {
-            // Extract time series data
-            const match = scriptContent.match(/rawTimeData = (\[.*?\]);/);
-            if (match && match[1]) {
-              try {
-                newTimeSeriesData = JSON.parse(match[1]);
+            // Use a safer regex approach
+            try {
+              // Find the array pattern between rawTimeData = and the next semicolon
+              const startIndex = scriptContent.indexOf('rawTimeData =') + 'rawTimeData ='.length;
+              let endIndex = scriptContent.indexOf(';', startIndex);
+              
+              if (endIndex === -1) {
+                // If no semicolon found, try to find the end of the array
+                endIndex = scriptContent.indexOf('];', startIndex) + 1;
+              }
+              
+              if (startIndex > 0 && endIndex > startIndex) {
+                const jsonStr = scriptContent.substring(startIndex, endIndex).trim();
+                newTimeSeriesData = JSON.parse(jsonStr);
                 console.log('Successfully extracted new time series data', newTimeSeriesData);
                 break;
-              } catch (e) {
-                console.error('Failed to parse time series data:', e);
               }
+            } catch (e) {
+              console.error('Failed to parse time series data:', e);
             }
           }
         }
@@ -393,11 +428,18 @@ export function getTimeChartScript(rawTimeData) {
         } else {
           console.warn('No new time series data found in response');
           // Show a message to the user
-          const noDataMessage = document.createElement('div');
-          noDataMessage.className = 'no-data-message';
-          noDataMessage.textContent = 'No data available for the selected filters';
-          document.querySelector('.chart-container').appendChild(noDataMessage);
-          setTimeout(() => noDataMessage.remove(), 3000);
+          const chartContainer = document.querySelector('.chart-container');
+          if (chartContainer) {
+            const noDataMessage = document.createElement('div');
+            noDataMessage.className = 'no-data-message';
+            noDataMessage.textContent = 'No data available for the selected filters';
+            chartContainer.appendChild(noDataMessage);
+            setTimeout(() => {
+              if (noDataMessage.parentNode) {
+                noDataMessage.remove();
+              }
+            }, 3000);
+          }
         }
       } catch (error) {
         console.error('Error fetching filtered data:', error);
@@ -405,7 +447,10 @@ export function getTimeChartScript(rawTimeData) {
         alert('Failed to update chart data. Please try again.');
       } finally {
         // Remove loading state
-        document.querySelector('.chart-container').classList.remove('loading');
+        const chartContainer = document.querySelector('.chart-container');
+        if (chartContainer) {
+          chartContainer.classList.remove('loading');
+        }
       }
     }
     
@@ -414,24 +459,41 @@ export function getTimeChartScript(rawTimeData) {
       // Add timezone indicator to all time displays
       const options = { timeZoneName: 'short' };
       
-      if (interval === 'minute' || interval.includes('min') || interval === 'hour') {
-        // For time-based intervals show hour:minute + timezone
+      // Select format based on interval granularity
+      if (interval.includes('sec')) {
+        // For seconds-level intervals, show hour:minute:second
+        return date.toLocaleTimeString([], {
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+          hour12: true,
+          timeZoneName: 'short'
+        });
+      } else if (interval === 'minute' || interval.includes('min') || interval === 'hour' || interval.includes('hour')) {
+        // For minute/hour intervals show hour:minute
         return date.toLocaleTimeString([], {
           hour: '2-digit', 
           minute: '2-digit',
-          hour12: true, // Use AM/PM format
-          timeZoneName: 'short' // Show timezone abbreviation
+          hour12: true,
+          timeZoneName: 'short'
         });
-      } else if (interval === 'day') {
-        // For day interval show abbreviated month + day
+      } else if (interval === 'day' || interval === 'week') {
+        // For day/week intervals show month + day
         return date.toLocaleDateString([], {
           month: 'short', 
           day: 'numeric',
           timeZoneName: 'short'
         });
+      } else if (interval === 'month') {
+        // For month intervals show month + year
+        return date.toLocaleDateString([], {
+          month: 'short',
+          year: 'numeric',
+          timeZoneName: 'short'
+        });
       }
       
-      // Default to a more complete format for other intervals
+      // Default format for other intervals
       return date.toLocaleString([], {
         month: 'short',
         day: 'numeric',
@@ -440,6 +502,36 @@ export function getTimeChartScript(rawTimeData) {
         hour12: true,
         timeZoneName: 'short'
       });
+    }
+    
+    // Update the chart with new data fetched from the server
+    function updateTimeChartWithNewData() {
+      console.log('Updating chart with new data points:', timeSeriesDataPoints.length);
+      
+      if (!timeSeriesChart) {
+        console.warn('Chart not initialized yet');
+        return;
+      }
+      
+      if (timeSeriesDataPoints.length === 0) {
+        console.warn('No data points to display');
+        return;
+      }
+      
+      // Format data points for the chart
+      const interval = intervalSelector.value;
+      const labels = timeSeriesDataPoints.map(point => formatDateLabel(point.timestamp, interval));
+      const values = timeSeriesDataPoints.map(point => point.requests);
+      
+      // Update chart data and options
+      timeSeriesChart.data.labels = labels;
+      timeSeriesChart.data.datasets[0].data = values;
+      timeSeriesChart.options.scales.x.title.text = getIntervalLabel(interval);
+      
+      // Update chart
+      timeSeriesChart.update();
+      
+      console.log('Chart updated successfully');
     }
     
     // Group data by the selected interval
@@ -538,50 +630,29 @@ export function getTimeChartScript(rawTimeData) {
       return result;
     }
     
-    // Update the chart with new time range and interval
+    // Update the chart with new time range and interval by fetching fresh data from server
     function updateTimeChart() {
-      // IMPORTANT: Always use the current time for the end time on every update
-      const now = new Date();
-      
-      console.log('Current time:', now.toLocaleString());
-      console.log('Current selected interval:', intervalSelector.value);
-      
-      // Force the end date/time to be now
-      endDatePicker.value = formatDateForInput(now);
-      endTimePicker.value = formatTimeForInput(now);
-      
-      // Get date range (using our updated end time)
-      const startDate = getStartDateTime();
-      const endDate = now; // Use now directly instead of getEndDateTime()
-      
-      console.log('Time range:', startDate.toLocaleString(), 'to', endDate.toLocaleString());
-      
-      // Filter data to the selected time range
-      const filteredData = filterDataByTimeRange(startDate, endDate);
-      console.log('Filtered data points:', filteredData.length);
-      
-      // Group data according to the selected interval
-      const groupedData = groupDataByInterval(filteredData, intervalSelector.value);
-      
-      // Sort data chronologically (oldest to newest)
-      groupedData.sort((a, b) => a.timestamp - b.timestamp);
-      
-      // Update chart data (oldest on left, newest on right)
-      const labels = groupedData.map(point => formatDateLabel(point.timestamp, intervalSelector.value));
-      const values = groupedData.map(point => point.requests);
-      
-      // Update chart
-      if (timeSeriesChart) {
-        timeSeriesChart.data.labels = labels;
-        timeSeriesChart.data.datasets[0].data = values;
-        timeSeriesChart.options.scales.x.title.text = getIntervalLabel(intervalSelector.value);
-        timeSeriesChart.update();
-      }
+      // Fetch fresh data with the current filters
+      fetchFilteredData();
     }
     
     // Set up event listeners for time range controls
     document.getElementById('applyTimeSettings').addEventListener('click', function() {
-      updateTimeChart();
+      // Add a loading indicator to the button
+      const button = this;
+      const originalText = button.textContent;
+      button.textContent = 'Refreshing...';
+      button.disabled = true;
+      
+      // Fetch new data from the server
+      fetchFilteredData()
+        .finally(() => {
+          // Restore button state after loading completes (success or error)
+          setTimeout(() => {
+            button.textContent = originalText;
+            button.disabled = false;
+          }, 500);
+        });
     });
     
     // Handle preset time range buttons
@@ -596,43 +667,70 @@ export function getTimeChartScript(rawTimeData) {
         // Always use the most current time for end time
         const now = new Date();
         let startDate;
+        let recommendedInterval = '10min'; // Default interval
         
         // Correctly set the time range based on preset value (going back from now)
         switch(value) {
           case '1h':
             // Go back 1 hour from current time
             startDate = new Date(now.getTime() - (1 * 60 * 60 * 1000));
+            // For 1-hour view, 1-minute intervals make sense
+            recommendedInterval = 'minute';
             break;
           case '6h':
             // Go back 6 hours from current time
             startDate = new Date(now.getTime() - (6 * 60 * 60 * 1000));
+            // For 6-hour view, 10-minute intervals make sense
+            recommendedInterval = '10min';
             break;
           case '12h':
             // Go back 12 hours from current time
             startDate = new Date(now.getTime() - (12 * 60 * 60 * 1000));
+            // For 12-hour view, 15-minute intervals work well
+            recommendedInterval = '15min';
             break;
           case '24h':
             // Go back 24 hours from current time
             startDate = new Date(now.getTime() - (24 * 60 * 60 * 1000));
+            // For 24-hour view, 30-minute or hourly intervals make sense
+            recommendedInterval = 'hour';
             break;
           case '7d':
             // Go back 7 days from current time
             startDate = new Date(now.getTime() - (7 * 24 * 60 * 60 * 1000));
+            // For 7-day view, 6-hour intervals make sense
+            recommendedInterval = '6hour';
+            break;
+          case '30d':
+            // Go back 30 days from current time
+            startDate = new Date(now.getTime() - (30 * 24 * 60 * 60 * 1000));
+            // For 30-day view, daily intervals make sense
+            recommendedInterval = 'day';
             break;
           default:
             // Default to 6 hours ago if something goes wrong
             startDate = new Date(now.getTime() - (6 * 60 * 60 * 1000));
+            recommendedInterval = '10min';
             break;
         }
         
-        // Update date/time pickers - end time is ALWAYS now
+        // Update date/time pickers
         startDatePicker.value = formatDateForInput(startDate);
         startTimePicker.value = formatTimeForInput(startDate);
         endDatePicker.value = formatDateForInput(now);
         endTimePicker.value = formatTimeForInput(now);
         
-        // Update chart
-        updateTimeChart();
+        // Set recommended interval for this time range
+        intervalSelector.value = recommendedInterval;
+        
+        // Add a loading indicator to the button
+        const button = this;
+        button.classList.add('loading');
+        
+        // Fetch data with the new time range
+        fetchFilteredData().finally(() => {
+          button.classList.remove('loading');
+        });
       });
     });
     

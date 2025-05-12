@@ -329,14 +329,44 @@ export async function getTimeSeriesData(options = {}) {
   // Convert interval to PostgreSQL interval
   let pgInterval;
   switch(interval) {
+    // Fine-grained intervals
+    case '5sec': pgInterval = '5 seconds'; break;
+    case '10sec': pgInterval = '10 seconds'; break;
+    case '30sec': pgInterval = '30 seconds'; break;
     case 'minute': pgInterval = 'minute'; break;
     case '5min': pgInterval = '5 minutes'; break;
     case '10min': pgInterval = '10 minutes'; break;
     case '15min': pgInterval = '15 minutes'; break;
     case '30min': pgInterval = '30 minutes'; break;
+    
+    // Coarser intervals for longer time periods
     case 'hour': pgInterval = 'hour'; break;
+    case '2hour': pgInterval = '2 hours'; break;
+    case '6hour': pgInterval = '6 hours'; break;
+    case '12hour': pgInterval = '12 hours'; break;
     case 'day': pgInterval = 'day'; break;
-    default: pgInterval = 'hour'; // Default to hour
+    case 'week': pgInterval = 'week'; break;
+    case 'month': pgInterval = 'month'; break;
+    
+    default: 
+      // Choose appropriate interval based on time range span
+      const timeSpanHours = (endTime - startTime) / (60 * 60 * 1000);
+      
+      if (timeSpanHours <= 1) {
+        pgInterval = 'minute'; // Less than 1 hour: use minutes
+      } else if (timeSpanHours <= 6) {
+        pgInterval = '10 minutes'; // 1-6 hours: use 10 min intervals
+      } else if (timeSpanHours <= 24) {
+        pgInterval = 'hour'; // 6-24 hours: use hourly intervals
+      } else if (timeSpanHours <= 168) { // 7 days
+        pgInterval = '6 hours'; // 1-7 days: use 6 hour intervals
+      } else {
+        pgInterval = 'day'; // More than 7 days: use daily intervals
+      }
+      
+      _logger('Auto-selected grouping interval %s for time span of %d hours', 
+              pgInterval, timeSpanHours.toFixed(1));
+      break;
   }
   try {
     // Detailed logging of database schema
