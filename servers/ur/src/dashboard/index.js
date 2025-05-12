@@ -3,7 +3,7 @@
  * Imports and assembles all dashboard components
  */
 import { getDashboardStyles } from './styles.js';
-import { initializeTimeControls, getTimeChartScript } from './timeChart.js';
+import { generateTrafficInsightsHtml, getTrafficInsightsScript, getTrafficInsightsStyles } from './trafficInsights.js';
 import { 
   generateRecentRequestsTable, 
   generateProcessMetricsTable, 
@@ -12,7 +12,6 @@ import {
   getFilterScript 
 } from './metricsTables.js';
 import { generateRefreshControls, getRefreshControlsScript } from './refreshControls.js';
-import { generateAnalyticsPanel, getAnalyticsPanelScript, getAnalyticsPanelStyles } from './analyticsPanel.js';
 import { logger } from '../logger.js';
 
 const _logger = logger.child('dashboard');
@@ -25,15 +24,8 @@ const _logger = logger.child('dashboard');
 export function generateDashboardHtml(metrics) {
   _logger('Generating dashboard HTML with metrics data');
   
-  // Apply robust fallbacks and defaults for all metrics properties
-  // This follows the same pattern used in PITokenClient for handling various response formats
-  metrics.recentRequests = metrics.recentRequests || [];
-  metrics.actionCounts = metrics.actionCounts || {};
-  metrics.processCounts = metrics.processCounts || {};
-  metrics.clientMetrics = metrics.clientMetrics || { ipCounts: [], referrerCounts: [] };
-  metrics.requestDetails = metrics.requestDetails || {};
-  
-  // Prepare data for process metrics table with full error handling
+  // Prepare data for process metrics table
+  // Add null checks to handle missing data
   const processCounts = metrics.processCounts || {};
   const allProcessIds = Object.keys(processCounts);
   const topProcessIds = allProcessIds
@@ -43,32 +35,17 @@ export function generateDashboardHtml(metrics) {
   // Add top process IDs to metrics
   metrics.topProcessIds = topProcessIds;
   
-  // Ensure timeSeriesData exists to prevent errors
-  metrics.timeSeriesData = metrics.timeSeriesData || [];
-  
-  // Get time labels for charts with proper error handling
-  metrics.timeLabels = metrics.timeSeriesData.length > 0 ? 
-    metrics.timeSeriesData.map(bucket => {
-      try {
-        if (!bucket || !bucket.timestamp) return '--:--';
-        const date = new Date(bucket.timestamp);
-        return `${date.getHours()}:${String(date.getMinutes()).padStart(2, '0')}`;
-      } catch (err) {
-        return '--:--'; // Fallback for invalid date
-      }
-    }) : [];
+  // Get time labels for charts
+  metrics.timeLabels = metrics.timeSeriesData.map(bucket => {
+    const date = new Date(bucket.timestamp);
+    return `${date.getHours()}:${String(date.getMinutes()).padStart(2, '0')}`;
+  });
   
   // Generate each section of the dashboard
   const lastUpdated = new Date().toISOString();
   const refreshControls = generateRefreshControls(lastUpdated);
-  
-  // Generate the new advanced analytics panel - ensure we have valid data
-  // Add a fallback for empty time series data
-  const timeSeriesData = metrics.timeSeriesData || [];
-  const analyticsPanel = generateAnalyticsPanel(timeSeriesData);
-  
-  // Generate the traditional dashboard components (we'll keep these for backward compatibility)
-  const timeControls = initializeTimeControls(metrics.timeSeriesData);
+  // Use our new traffic insights component instead of the old time chart
+  const trafficInsights = generateTrafficInsightsHtml(metrics.timeSeriesData);
   const recentRequestsTable = generateRecentRequestsTable(metrics.recentRequests, metrics.requestDetails);
   const processMetricsTable = generateProcessMetricsTable(metrics);
   const actionMetricsTable = generateActionMetricsTable(metrics);
@@ -98,7 +75,7 @@ export function generateDashboardHtml(metrics) {
   
   // Get all JavaScript for the dashboard
   const dashboardScripts = `
-    ${getTimeChartScript(metrics.timeSeriesData)}
+    ${getTrafficInsightsScript(metrics.timeSeriesData)}
     
     // Process chart
     const processLabels = ${JSON.stringify(topProcessIds.map(id => id.substring(0, 8) + '...'))};        
@@ -243,159 +220,50 @@ export function generateDashboardHtml(metrics) {
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
       <title>AO Router Metrics Dashboard</title>
+      <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
       <style>
         ${getDashboardStyles()}
-        ${getAnalyticsPanelStyles()}
-        
-        /* Tab styles */
-        .tab-container {
-          margin-bottom: 1rem;
-        }
-        
-        .tabs {
-          display: flex;
-          list-style: none;
-          padding: 0;
-          margin: 0;
-          border-bottom: 1px solid #ddd;
-        }
-        
-        .tab-button {
-          padding: 0.75rem 1.5rem;
-          background-color: #f1f1f1;
-          border: none;
-          cursor: pointer;
-          transition: background-color 0.3s;
-          font-size: 1rem;
-          border-top-left-radius: 4px;
-          border-top-right-radius: 4px;
-        }
-        
-        .tab-button:hover {
-          background-color: #ddd;
-        }
-        
-        .tab-button.active {
-          background-color: #fff;
-          border: 1px solid #ddd;
-          border-bottom: 1px solid white;
-          margin-bottom: -1px;
-          font-weight: bold;
-        }
-        
-        .tab-content {
-          display: none;
-          padding: 1rem;
-          background-color: white;
-          border: 1px solid #ddd;
-          border-top: none;
-        }
-        
-        .tab-content.active {
-          display: block;
-        }
+        ${getTrafficInsightsStyles()}
       </style>
-      <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     </head>
     <body>
-      <div class="dashboard-container">
-        <header class="dashboard-header">
-          <h1>AO Router Metrics Dashboard</h1>
-          ${refreshControls}
-        </header>
-        
-        <main class="dashboard-content">
-          <section class="metrics-section" id="traffic-analytics">
-            <div class="tab-container">
-              <ul class="tabs">
-                <li><button class="tab-button active" data-tab="advanced-analytics">Advanced Analytics</button></li>
-                <li><button class="tab-button" data-tab="basic-traffic">Basic Traffic</button></li>
-              </ul>
-              
-              <div id="advanced-analytics" class="tab-content active">
-                ${analyticsPanel}
-              </div>
-              
-              <div id="basic-traffic" class="tab-content">
-                <h2>Traffic Overview (Legacy)</h2>
-                ${timeControls}
-              </div>
-            </div>
-          </section>
+      <h1>AO Router Metrics Dashboard</h1>
+      ${refreshControls}
       
-          <div class="tabs">
-            <div class="tab active" data-tab="requests">Recent Requests</div>
-            <div class="tab" data-tab="processes">Process Metrics</div>
-            <div class="tab" data-tab="actions">Action Metrics</div>
-            <div class="tab" data-tab="clients">Client Metrics</div>
-          </div>
-          
-          <div class="tab-content active" id="requests-tab">
-            ${recentRequestsTable}
-          </div>
-          
-          <div class="tab-content" id="processes-tab">
-            ${processMetricsTable}
-          </div>
-          
-          <div class="tab-content" id="actions-tab">
-            ${actionMetricsTable}
-          </div>
-          
-          <div class="tab-content" id="clients-tab">
-            ${clientMetricsTable}
-          </div>
-          
-          <script>
-            ${dashboardScripts}
-          </script>
-        </main>
-      </div>
+      ${statsOverview}
+      
+      <div class="dashboard-container">
+        <!-- New Traffic Insights Component -->
+        <div class="card">
+          <h2>Traffic Insights</h2>
+          ${trafficInsights}
+        </div>
         
-          <div class="card metrics-card">
-            <h2>Request Details</h2>
-            <div class="tabs">
-              <div class="tab active" data-tab="requests">Recent Requests</div>
-              <div class="tab" data-tab="processes">Process Metrics</div>
-              <div class="tab" data-tab="actions">Action Metrics</div>
-              <div class="tab" data-tab="clients">Client Metrics</div>
-            </div>
-            
-            <div class="tab-content active" id="requests-tab">
-              ${recentRequestsTable}
-            </div>
-            
-            <div class="tab-content" id="processes-tab">
-              ${processMetricsTable}
-            </div>
-            
-            <div class="tab-content" id="actions-tab">
-              ${actionMetricsTable}
-            </div>
-            
-            <div class="tab-content" id="clients-tab">
-              ${clientMetricsTable}
-            </div>
-          </div>
-        </main>
-      </div>
+        <div class="tabs">
+          <div class="tab active" data-tab="requests">Recent Requests</div>
+          <div class="tab" data-tab="processes">Process Metrics</div>
+          <div class="tab" data-tab="actions">Action Metrics</div>
+          <div class="tab" data-tab="clients">Client Metrics</div>
+        </div>
+        
+        <div class="tab-content active" id="requests-tab">
+          ${recentRequestsTable}
+        </div>
+        
+        <div class="tab-content" id="processes-tab">
+          ${processMetricsTable}
+        </div>
+        
+        <div class="tab-content" id="actions-tab">
+          ${actionMetricsTable}
+        </div>
+        
+        <div class="tab-content" id="clients-tab">
+          ${clientMetricsTable}
+        </div>
       
       <script>
         ${dashboardScripts}
-        ${getAnalyticsPanelScript(JSON.stringify(timeSeriesData || []))}
-        
-        // Tab switching for analytics vs basic traffic view
-        document.querySelectorAll('.tab-button').forEach(button => {
-          button.addEventListener('click', () => {
-            // Remove active class from all buttons and content
-            document.querySelectorAll('.tab-button').forEach(btn => btn.classList.remove('active'));
-            document.querySelectorAll('.tab-container .tab-content').forEach(content => content.classList.remove('active'));
-            
-            // Add active class to clicked button and corresponding content
-            button.classList.add('active');
-            document.getElementById(button.dataset.tab).classList.add('active');
-          });
-        });
       </script>
     </body>
     </html>
