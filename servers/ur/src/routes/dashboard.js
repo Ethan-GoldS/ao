@@ -23,9 +23,36 @@ export function mountDashboard(app) {
         setTimeout(() => reject(new Error('Dashboard generation timed out')), 15000);
       });
       
+      // Extract time range parameters from query
+      const timeOptions = {};
+      
+      // Process startTime if provided
+      if (req.query.startTime) {
+        timeOptions.startTime = req.query.startTime;
+      } else if (req.query.hours) {
+        timeOptions.hours = parseInt(req.query.hours, 10);
+      }
+      
+      // Process endTime if provided
+      if (req.query.endTime) {
+        timeOptions.endTime = req.query.endTime;
+      }
+      
+      // Process interval if provided
+      if (req.query.interval) {
+        timeOptions.interval = req.query.interval;
+      }
+      
+      // Process process ID filter if provided
+      if (req.query.processId) {
+        timeOptions.processId = req.query.processId;
+      }
+      
+      _logger('Dashboard requested with time options: %o', timeOptions);
+      
       const metricsPromise = Promise.resolve().then(() => {
         try {
-          return getMetrics() || {}; // Ensure we always have an object
+          return getMetrics(timeOptions) || {}; // Pass time options to getMetrics
         } catch (err) {
           _logger('Error fetching metrics: %o', err);
           return {}; // Return empty object on error
