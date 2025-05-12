@@ -615,56 +615,139 @@ export async function getTotalStats() {
  * @returns {Promise<Object>} All metrics
  */
 export async function getAllMetrics() {
+  // Create safe defaults for all metrics data
+  let recentRequests = [];
+  let requestDetails = {};
+  let processMetrics = [];
+  let actionMetrics = [];
+  let clientMetrics = { ipCounts: [], referrerCounts: [] };
+  let timeSeriesData = [];
+  let timeLabels = [];
+  let topProcessIds = [];
+  let totals = {
+    totalRequests: 0,
+    uniqueProcesses: 0,
+    uniqueIps: 0,
+    startTime: new Date().toISOString()
+  };
+  
+  // Implement Promise.allSettled pattern to prevent any single failure from breaking everything
+  // This is similar to the fallback and error handling approaches used in your PITokenClient
   try {
-    const recentRequests = await getRecentRequests(100)
+    // Use Promise.allSettled to ensure all promises complete even if some fail
+    const [
+      recentRequestsResult, 
+      processMetricsResult, 
+      actionMetricsResult, 
+      clientMetricsResult,
+      timeSeriesResult,
+      totalsResult
+    ] = await Promise.allSettled([
+      getRecentRequests(100),
+      getProcessMetrics(),
+      getActionMetrics(),
+      getClientMetrics(),
+      getTimeSeriesData(24),
+      getTotalStats()
+    ]);
     
-    // Group request details by processId
-    const requestDetails = {}
-    for (const req of recentRequests) {
-      if (!requestDetails[req.processId]) {
-        requestDetails[req.processId] = []
-      }
-      requestDetails[req.processId].push(req)
+    // Safely extract values with fallbacks
+    if (recentRequestsResult.status === 'fulfilled') {
+      recentRequests = recentRequestsResult.value || [];
     }
     
-    const processMetrics = await getProcessMetrics()
-    const actionMetrics = await getActionMetrics()
-    const clientMetrics = await getClientMetrics()
-    const { timeSeriesData, timeLabels, topProcessIds } = await getTimeSeriesData(24)
-    const totals = await getTotalStats()
+    if (processMetricsResult.status === 'fulfilled') {
+      processMetrics = processMetricsResult.value || [];
+    }
     
-    return {
+    if (actionMetricsResult.status === 'fulfilled') {
+      actionMetrics = actionMetricsResult.value || [];
+    }
+    
+    if (clientMetricsResult.status === 'fulfilled') {
+      clientMetrics = clientMetricsResult.value || { ipCounts: [], referrerCounts: [] };
+    }
+    
+    if (timeSeriesResult.status === 'fulfilled' && timeSeriesResult.value) {
+      // Extract time series data safely with defaults
+      timeSeriesData = timeSeriesResult.value.timeSeriesData || [];
+      timeLabels = timeSeriesResult.value.timeLabels || [];
+      topProcessIds = timeSeriesResult.value.topProcessIds || [];
+    }
+    
+    if (totalsResult.status === 'fulfilled') {
+      totals = totalsResult.value || {
+        totalRequests: 0,
+        uniqueProcesses: 0,
+        uniqueIps: 0,
+        startTime: new Date().toISOString()
+      };
+    }
+    
+    // Build request details mapping safely
+    requestDetails = {};
+    for (const req of recentRequests) {
+      if (req && req.processId) {
+        if (!requestDetails[req.processId]) {
+          requestDetails[req.processId] = [];
+        }
+        requestDetails[req.processId].push(req);
+      }
+    }
+    
+    // Create return object with safe reductions that can handle empty or invalid inputs
+    const safeReturn = {
       recentRequests,
       requestDetails,
-      processCounts: processMetrics.reduce((obj, metric) => {
-        obj[metric.processId] = metric.requestCount
-        return obj
-      }, {}),
-      processTiming: processMetrics.reduce((obj, metric) => {
-        obj[metric.processId] = { avgDuration: metric.avgDuration }
-        return obj
-      }, {}),
-      actionCounts: actionMetrics.reduce((obj, metric) => {
-        obj[metric.action] = metric.requestCount
-        return obj
-      }, {}),
-      actionTiming: actionMetrics.reduce((obj, metric) => {
-        obj[metric.action] = { avgDuration: metric.avgDuration }
-        return obj
-      }, {}),
-      ipCounts: clientMetrics.ipCounts,
-      referrerCounts: clientMetrics.referrerCounts,
-      timeSeriesData,
-      timeLabels,
-      topProcessIds,
-      totalRequests: totals.totalRequests,
-      uniqueProcesses: totals.uniqueProcesses,
-      uniqueIps: totals.uniqueIps,
-      startTime: totals.startTime
-    }
+      
+      // Use safe reducers with null checking
+      processCounts: Array.isArray(processMetrics) ? processMetrics.reduce((obj, metric) => {
+        if (metric && metric.processId) {
+          obj[metric.processId] = parseInt(metric.requestCount, 10) || 0;
+        }
+        return obj;
+      }, {}) : {},
+      
+      processTiming: Array.isArray(processMetrics) ? processMetrics.reduce((obj, metric) => {
+        if (metric && metric.processId) {
+          obj[metric.processId] = { avgDuration: parseFloat(metric.avgDuration) || 0 };
+        }
+        return obj;
+      }, {}) : {},
+      
+      actionCounts: Array.isArray(actionMetrics) ? actionMetrics.reduce((obj, metric) => {
+        if (metric && metric.action) {
+          obj[metric.action] = parseInt(metric.requestCount, 10) || 0;
+        }
+        return obj;
+      }, {}) : {},
+      
+      actionTiming: Array.isArray(actionMetrics) ? actionMetrics.reduce((obj, metric) => {
+        if (metric && metric.action) {
+          obj[metric.action] = { avgDuration: parseFloat(metric.avgDuration) || 0 };
+        }
+        return obj;
+      }, {}) : {},
+      
+      // Use safe array access with defaults
+      ipCounts: Array.isArray(clientMetrics.ipCounts) ? clientMetrics.ipCounts : [],
+      referrerCounts: Array.isArray(clientMetrics.referrerCounts) ? clientMetrics.referrerCounts : [],
+      
+      // Ensure time series data is valid
+      timeSeriesData: Array.isArray(timeSeriesData) ? timeSeriesData : [],
+      timeLabels: Array.isArray(timeLabels) ? timeLabels : [],
+      topProcessIds: Array.isArray(topProcessIds) ? topProcessIds : [],
+      
+      // Include totals
+      ...totals
+    };
+    
+    return safeReturn;
   } catch (error) {
-    _logger('Error getting all metrics: %O', error)
-    return {
+    _logger('Error getting all metrics: %O', error);
+    
+    // Return a safe default object if anything fails
+    return { 
       recentRequests: [],
       requestDetails: {},
       processCounts: {},
@@ -680,7 +763,7 @@ export async function getAllMetrics() {
       uniqueProcesses: 0,
       uniqueIps: 0,
       startTime: new Date().toISOString()
-    }
+    };
   }
 }
 
