@@ -64,7 +64,8 @@ export async function storeMetrics(details) {
       action,
       duration,
       timeReceived,
-      timeCompleted
+      timeCompleted,
+      uniqueId // Add unique ID for tracking
     } = details
 
     // Parse JSON body if it's a string
@@ -114,8 +115,9 @@ export async function storeMetrics(details) {
       `INSERT INTO metrics_requests (
         process_id, request_ip, request_referrer, request_method, 
         request_path, request_user_agent, request_origin, request_content_type,
-        request_body, request_raw, response_body, action, duration, time_received, time_completed
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+        request_body, request_raw, response_body, action, duration, time_received, time_completed,
+        unique_id
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
       RETURNING id`,
       [
         processId,
@@ -132,7 +134,8 @@ export async function storeMetrics(details) {
         action || 'unknown',
         duration || 0,
         timeReceived ? new Date(timeReceived) : new Date(),
-        timeCompleted ? new Date(timeCompleted) : new Date()
+        timeCompleted ? new Date(timeCompleted) : new Date(),
+        uniqueId || `${processId}-${Date.now()}-${Math.random().toString(36).substring(2, 8)}` // Include unique tracking ID
       ]
     )
 
