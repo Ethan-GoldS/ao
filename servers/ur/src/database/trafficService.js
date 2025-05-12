@@ -61,7 +61,7 @@ export async function getTrafficData(options) {
       )
       SELECT 
         bucket_time,
-        COUNT(*) AS request_count,
+        SUM(count_per_action) AS request_count,
         jsonb_object_agg(
           COALESCE(action, 'unknown'),
           COALESCE(count_per_action, 0)
