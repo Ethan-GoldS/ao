@@ -348,20 +348,20 @@ export async function getTimeSeriesData(hours = 24) {
           _logger('Simple time_received check returned no rows');
         }
         
-        // Now try the main query with quoted column names
+        // Try the query without quotes around column names
         const result = await query(
           `SELECT 
-             date_trunc('hour', "time_received") as hour,
+             date_trunc('hour', time_received) as hour,
              COUNT(*) as total_requests,
-             jsonb_object_agg("process_id", process_count) as process_counts
+             jsonb_object_agg(process_id, process_count) as process_counts
            FROM (
              SELECT 
-               date_trunc('hour', "time_received") as hour,
-               "process_id",
+               date_trunc('hour', time_received) as hour,
+               process_id,
                COUNT(*) as process_count
              FROM metrics_requests
-             WHERE "time_received" > NOW() - interval '${hours} hours'
-             GROUP BY hour, "process_id"
+             WHERE time_received > NOW() - interval '${hours} hours'
+             GROUP BY hour, process_id
              ORDER BY hour, process_count DESC
            ) AS hourly_process_counts
            GROUP BY hour
@@ -387,6 +387,7 @@ export async function getTimeSeriesData(hours = 24) {
     if (timestampCheck.rows.length > 0) {
       // Column exists, use it
       try {
+        _logger('Using timestamp column for time series data');
         const result = await query(
           `SELECT 
              date_trunc('hour', timestamp) as hour,
