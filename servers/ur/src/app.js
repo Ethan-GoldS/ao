@@ -10,6 +10,7 @@ import { redirectWith } from './redirect.js'
 import { metricsMiddleware } from './middleware/metricsMiddleware.js'
 import { mountDashboard } from './routes/dashboard.js'
 import newDashboardRouter from './routes/new-dashboard.js'
+import trafficDashboardRouter from './routes/traffic-dashboard.js'
 
 const middlewareWithByStrategy = {
   proxy: proxyWith,
@@ -33,6 +34,9 @@ pipe(
     
     // Mount new PostgreSQL-based metrics dashboard
     app.use('/new-dashboard', newDashboardRouter)
+    
+    // Mount traffic API endpoints
+    app.use('/api', trafficDashboardRouter)
     
     return app
   },
