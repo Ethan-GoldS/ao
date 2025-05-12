@@ -63,8 +63,27 @@ function formatJsonForDisplay(jsonObj) {
 }
 
 export function generateRecentRequestsTable(recentRequests, requestDetails) {
+  // Filter out invalid records before processing
+  const validRequests = recentRequests.filter(req => {
+    // Check for minimum data quality requirements
+    if (!req.processId) return false;
+    
+    // Filter out 0ms records that also have no method/path - these are likely invalid
+    if (req.duration === 0 && (req.method === 'unknown' || !req.method) && (req.path === 'unknown' || !req.path)) {
+      return false;
+    }
+    
+    // Another strong signal of an invalid record is 0ms with no request body
+    if (req.duration === 0 && !req.request_body && !req.request_raw && !req.rawBody) {
+      return false;
+    }
+    
+    // Keep records with valid data
+    return true;
+  });
+  
   // Generate recent requests table with dropdowns for details
-  const recentRequestsHtml = recentRequests.map((req, index) => {
+  const recentRequestsHtml = validRequests.map((req, index) => {
     // Try to get request details for this process ID
     const details = requestDetails[req.processId] || [];
     const detail = details.length > 0 ? details[0] : null;
