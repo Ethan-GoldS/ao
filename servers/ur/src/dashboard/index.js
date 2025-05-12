@@ -208,8 +208,7 @@ export function generateDashboardHtml(metrics) {
     
     ${getRefreshControlsScript()}
     
-    // Initialize the chart
-    initializeTimeChart();
+    // The chart will initialize automatically through its own DOMContentLoaded event
   `;
   
   // Assemble the complete HTML
