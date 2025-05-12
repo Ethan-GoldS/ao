@@ -82,8 +82,8 @@ async function getTrafficData(timeRange, timeInterval, processFilter) {
     // Build the base query - use date_trunc for standard PostgreSQL compatibility
     let sql = 'WITH time_buckets AS (\n' +
       '        SELECT \n' +
-      '          date_trunc(\'' + truncationUnit + '\', time_received) AS bucket_time,\n' +
-      '          process_id,\n' +
+      '          date_trunc(\'' + truncationUnit + '\', "time_received") AS bucket_time,\n' +
+      '          "process_id",\n' +
       '          action,\n' +
       '          duration\n' +
       '        FROM metrics_requests\n' +
@@ -94,7 +94,7 @@ async function getTrafficData(timeRange, timeInterval, processFilter) {
 
     // Add process filter if provided
     if (processFilter) {
-      sql += ' AND process_id LIKE $' + paramIndex;
+      sql += ' AND "process_id" LIKE $' + paramIndex;
       params.push('%' + processFilter + '%');
       paramIndex++;
     }
@@ -105,13 +105,13 @@ async function getTrafficData(timeRange, timeInterval, processFilter) {
       '        SELECT\n' +
       '          bucket_time,\n' +
       '          COUNT(*) AS request_count,\n' +
-      '          COUNT(DISTINCT process_id) AS unique_process_count,\n' +
-      '          array_agg(DISTINCT process_id) AS all_process_ids,\n' +
-      '          array_agg(process_id) FILTER (WHERE process_id IN (\n' +
-      '            SELECT process_id\n' +
+      '          COUNT(DISTINCT "process_id") AS unique_process_count,\n' +
+      '          array_agg(DISTINCT "process_id") AS all_process_ids,\n' +
+      '          array_agg("process_id") FILTER (WHERE "process_id" IN (\n' +
+      '            SELECT "process_id"\n' +
       '            FROM time_buckets\n' +
       '            WHERE bucket_time = tb.bucket_time\n' +
-      '            GROUP BY process_id\n' +
+      '            GROUP BY "process_id"\n' +
       '            ORDER BY COUNT(*) DESC\n' +
       '            LIMIT 5\n' +
       '          )) AS top_process_ids\n' +

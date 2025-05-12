@@ -332,8 +332,8 @@ export async function getTimeSeriesData(hours = 24) {
         // Try a simpler query first to verify column access
         const simpleCheck = await query(
           `SELECT 
-             MIN(time_received) as min_time,
-             MAX(time_received) as max_time, 
+             MIN("time_received") as min_time,
+             MAX("time_received") as max_time, 
              COUNT(*) as count
            FROM metrics_requests
            LIMIT 1`
@@ -351,17 +351,17 @@ export async function getTimeSeriesData(hours = 24) {
         // Now try the main query with quoted column names
         const result = await query(
           `SELECT 
-             date_trunc('hour', time_received) as hour,
+             date_trunc('hour', "time_received") as hour,
              COUNT(*) as total_requests,
-             jsonb_object_agg(process_id, process_count) as process_counts
+             jsonb_object_agg("process_id", process_count) as process_counts
            FROM (
              SELECT 
-               date_trunc('hour', time_received) as hour,
-               process_id,
+               date_trunc('hour', "time_received") as hour,
+               "process_id",
                COUNT(*) as process_count
              FROM metrics_requests
-             WHERE time_received > NOW() - interval '${hours} hours'
-             GROUP BY hour, process_id
+             WHERE "time_received" > NOW() - interval '${hours} hours'
+             GROUP BY hour, "process_id"
              ORDER BY hour, process_count DESC
            ) AS hourly_process_counts
            GROUP BY hour
