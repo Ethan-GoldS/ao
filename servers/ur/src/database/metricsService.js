@@ -360,15 +360,41 @@ export async function getTimeSeriesData(hours = 24) {
         5000 // 5 second timeout
       );
       
-      // Also add a migration query to ensure we have a time column for future requests
+      // If time columns are missing, attempt a comprehensive table modification
       try {
-        _logger('Attempting to add time_received column if it does not exist');
+        _logger('Attempting comprehensive table fix for time-related columns');
+        
+        // First try to add just the time_received column with correct constraints
         await query(
           `ALTER TABLE metrics_requests ADD COLUMN IF NOT EXISTS time_received TIMESTAMPTZ NOT NULL DEFAULT NOW()`
         );
-        _logger('Successfully ensured time_received column exists');
+        _logger('Successfully added time_received column');
+        
+        // Try to add time_completed column also
+        await query(
+          `ALTER TABLE metrics_requests ADD COLUMN IF NOT EXISTS time_completed TIMESTAMPTZ`
+        );
+        _logger('Successfully added time_completed column');
+        
+        // Add request_raw if it doesn't exist
+        await query(
+          `ALTER TABLE metrics_requests ADD COLUMN IF NOT EXISTS request_raw TEXT`
+        );
+        
+        // Add response_body if it doesn't exist
+        await query(
+          `ALTER TABLE metrics_requests ADD COLUMN IF NOT EXISTS response_body TEXT`
+        );
+        
+        // Create necessary indexes
+        await query(`CREATE INDEX IF NOT EXISTS idx_metrics_time_received ON metrics_requests(time_received)`);
+        await query(`CREATE INDEX IF NOT EXISTS idx_metrics_process_id ON metrics_requests(process_id)`);
+        await query(`CREATE INDEX IF NOT EXISTS idx_metrics_action ON metrics_requests(action)`);
+        
+        _logger('Table metrics_requests structure has been verified and fixed');
       } catch (err) {
-        _logger('Error ensuring time_received column: %s', err.message);
+        _logger('Error updating table structure: %s', err.message);
+        _logger('Consider manually recreating the table with the schema provided in the code repository');
       }
       
       // Generate time series data using just the totals
