@@ -25,8 +25,15 @@ const _logger = logger.child('dashboard');
 export function generateDashboardHtml(metrics) {
   _logger('Generating dashboard HTML with metrics data');
   
-  // Prepare data for process metrics table
-  // Add null checks to handle missing data
+  // Apply robust fallbacks and defaults for all metrics properties
+  // This follows the same pattern used in PITokenClient for handling various response formats
+  metrics.recentRequests = metrics.recentRequests || [];
+  metrics.actionCounts = metrics.actionCounts || {};
+  metrics.processCounts = metrics.processCounts || {};
+  metrics.clientMetrics = metrics.clientMetrics || { ipCounts: [], referrerCounts: [] };
+  metrics.requestDetails = metrics.requestDetails || {};
+  
+  // Prepare data for process metrics table with full error handling
   const processCounts = metrics.processCounts || {};
   const allProcessIds = Object.keys(processCounts);
   const topProcessIds = allProcessIds
@@ -36,11 +43,20 @@ export function generateDashboardHtml(metrics) {
   // Add top process IDs to metrics
   metrics.topProcessIds = topProcessIds;
   
-  // Get time labels for charts
-  metrics.timeLabels = metrics.timeSeriesData.map(bucket => {
-    const date = new Date(bucket.timestamp);
-    return `${date.getHours()}:${String(date.getMinutes()).padStart(2, '0')}`;
-  });
+  // Ensure timeSeriesData exists to prevent errors
+  metrics.timeSeriesData = metrics.timeSeriesData || [];
+  
+  // Get time labels for charts with proper error handling
+  metrics.timeLabels = metrics.timeSeriesData.length > 0 ? 
+    metrics.timeSeriesData.map(bucket => {
+      try {
+        if (!bucket || !bucket.timestamp) return '--:--';
+        const date = new Date(bucket.timestamp);
+        return `${date.getHours()}:${String(date.getMinutes()).padStart(2, '0')}`;
+      } catch (err) {
+        return '--:--'; // Fallback for invalid date
+      }
+    }) : [];
   
   // Generate each section of the dashboard
   const lastUpdated = new Date().toISOString();
