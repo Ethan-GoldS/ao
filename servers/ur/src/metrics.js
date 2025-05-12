@@ -94,11 +94,36 @@ export function recordRequestDetails(details) {
     return;
   }
   
+  // Check if this is a 'meaningful' metrics record with proper duration
+  const hasDuration = typeof details.duration === 'number' && details.duration > 0;
+  const hasRequestBody = details.requestBody || 
+                        (details.rawBody && details.rawBody.includes('body'));
+                        
+  // Log detailed diagnostics to track the issue
+  _logger('Recording metrics for process %s: duration=%dms, hasBody=%s, action=%s', 
+    details.processId,
+    details.duration || 0,
+    hasRequestBody ? 'yes' : 'no',
+    details.action || 'unknown'
+  );
+  
+  // If timing is available, log it for troubleshooting
+  if (details.timing) {
+    _logger('Timing details: start=%d, end=%d, calculated=%d', 
+      details.timing.startTime,
+      details.timing.endTime,
+      details.timing.calculatedDuration
+    );
+  }
+  
   // Store metrics in PostgreSQL database
   storeMetrics(details)
     .then(success => {
       if (success) {
-        _logger('Recorded request details for process %s', details.processId);
+        _logger('Metrics stored successfully for process %s (duration: %dms)', 
+          details.processId, 
+          details.duration || 0
+        );
       } else {
         _logger('Failed to store metrics for process %s', details.processId);
       }

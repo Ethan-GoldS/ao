@@ -138,8 +138,9 @@ export function metricsMiddleware() {
       _logger('Error capturing raw request data: %O', err);
     }
     
-    // Record basic request details immediately (without parsing body)
-    const requestDetails = {
+    // Prepare initial request details (but don't store yet to avoid duplicate entries)
+    // We'll store the complete record after the request is processed
+    const initialDetails = {
       timestamp: new Date().toISOString(),
       method: req.method,
       path: req.path,
@@ -152,8 +153,9 @@ export function metricsMiddleware() {
       rawBody: rawRequestData // Store raw request data
     };
     
-    // Store request details for dashboard
-    recordRequestDetails(requestDetails);
+    // IMPORTANT: Not recording metrics here anymore to avoid duplicate/incomplete entries
+    // Instead, we'll only store a complete record at the end of the request
+    _logger('Tracking started for request to %s, processId: %s', req.path, processId);
     
     // Start tracking request for performance metrics
     const tracking = {
@@ -321,12 +323,29 @@ export function metricsMiddleware() {
           }
         }
         
+        // Record detailed diagnostics for debugging this issue
+        _logger('Completing metrics for processId %s, duration %dms, action %s, bodySize %d bytes', 
+          processId, 
+          duration, 
+          action || 'unknown',
+          requestBodyData ? JSON.stringify(requestBodyData).length : 0
+        );
+        
         // Create a comprehensive metadata record with everything we know
         const metadataRecord = {
-          ...tracking,
-          processId, // Ensure processId is correctly passed
-          duration,
+          ...initialDetails, // Include all fields from initial details
+          ...tracking,       // Include tracking data
+          processId,         // Ensure processId is correctly passed
+          duration,          // Include the calculated duration
           action: action || 'unknown',
+          // Add timing details for debugging
+          timing: {
+            startTime: tracking.startTime,
+            endTime: Date.now(),
+            calculatedDuration: duration,
+            timeReceived: initialDetails.timestamp,
+            timeCompleted: new Date().toISOString()
+          },
           // Include enhanced metadata about the request/response
           metadata: {
             request: {
@@ -350,7 +369,8 @@ export function metricsMiddleware() {
           responseBody: responseRaw
         };
         
-        // Update metrics with duration and captured body
+        // ONLY record metrics here, at the end of the request processing
+        // This eliminates the duplicate/incomplete entries with 0ms duration
         finishTracking(metadataRecord, action);
       } catch (err) {
         // Never let metrics collection affect the actual response
