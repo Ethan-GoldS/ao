@@ -16,23 +16,41 @@ const DEFAULT_TIMEOUT_MS = 15000
 // Create a new PostgreSQL connection pool using DB_URL from config
 _logger('Initializing database connection pool with URL: %s', config.dbUrl.replace(/\/\/.*?:.*?@/, '//***:***@')); // Log URL with credentials hidden
 
+// Track active connections to help debug connection leaks
+let activeConnections = 0;
+
 const pool = new Pool({
   connectionString: config.dbUrl,
-  max: 20, // Maximum number of clients in the pool
-  idleTimeoutMillis: 30000, // Close idle clients after 30 seconds
+  max: 10, // Reduced maximum number of clients in the pool
+  min: 2, // Keep at least 2 connections open
+  idleTimeoutMillis: 60000, // Close idle clients after 60 seconds
   connectionTimeoutMillis: 5000, // Return an error after 5 seconds if connection not established
 })
 
 pool.on('connect', client => {
-  _logger('New database connection established')
-})
+  activeConnections++;
+  _logger('New database connection established (active: %d/%d)', activeConnections, pool.options.max);
+});
+
+pool.on('remove', client => {
+  activeConnections--;
+  _logger('Database connection removed from pool (active: %d/%d)', activeConnections, pool.options.max);
+});
 
 pool.on('error', (err) => {
-  _logger('Unexpected error on idle client: %O', err)
-})
+  _logger('Unexpected error on idle client: %O', err);
+});
+
+// Check pool status periodically
+setInterval(() => {
+  _logger('Connection pool status: %d active connections, %d idle, %d total', 
+    activeConnections, 
+    pool.idleCount, 
+    pool.totalCount);
+}, 30000); // Log every 30 seconds
 
 /**
- * Execute a query with timeout handling
+ * Execute a query with timeout handling and improved connection management
  * @param {String} text SQL query text
  * @param {Array} params Query parameters
  * @param {Number} timeoutMs Query timeout in milliseconds
@@ -40,11 +58,22 @@ pool.on('error', (err) => {
  */
 export async function query(text, params = [], timeoutMs = DEFAULT_TIMEOUT_MS) {
   const start = Date.now()
-  const client = await pool.connect()
+  let client = null
   
   try {
-    // Create a promise that will reject after the timeout
+    // Get a client from the pool with a timeout
+    const clientPromise = pool.connect()
     const timeoutPromise = new Promise((_, reject) => {
+      setTimeout(() => {
+        reject(new Error(`Connection acquisition timed out after ${timeoutMs/2}ms`))
+      }, timeoutMs/2) // Half the timeout for connection acquisition
+    })
+    
+    // Race connection acquisition against timeout
+    client = await Promise.race([clientPromise, timeoutPromise])
+    
+    // Create a promise that will reject after the query timeout
+    const queryTimeoutPromise = new Promise((_, reject) => {
       setTimeout(() => {
         reject(new Error(`Database query timed out after ${timeoutMs}ms`))
       }, timeoutMs)
@@ -53,7 +82,7 @@ export async function query(text, params = [], timeoutMs = DEFAULT_TIMEOUT_MS) {
     // Race the query against the timeout
     const result = await Promise.race([
       client.query(text, params),
-      timeoutPromise
+      queryTimeoutPromise
     ])
 
     const duration = Date.now() - start
@@ -65,7 +94,15 @@ export async function query(text, params = [], timeoutMs = DEFAULT_TIMEOUT_MS) {
     _logger('Query error %s in %dms: %O', text.substring(0, 60), duration, error)
     throw error
   } finally {
-    client.release()
+    if (client) {
+      // Make sure to release the client back to the pool
+      // The done callback is used to handle errors during release
+      client.release((err) => {
+        if (err) {
+          _logger('Error releasing client back to pool: %O', err)
+        }
+      })
+    }
   }
 }
 
