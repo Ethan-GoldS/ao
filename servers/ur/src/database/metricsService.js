@@ -176,7 +176,7 @@ export async function getProcessMetrics() {
          process_id,
          COUNT(*) as request_count,
          AVG(duration) as avg_duration,
-         MAX(timestamp) as last_request
+         MAX(time_received) as last_request
        FROM metrics_requests
        GROUP BY process_id
        ORDER BY request_count DESC`
@@ -524,7 +524,7 @@ export async function getTotalStats() {
          COUNT(*) as total_requests,
          COUNT(DISTINCT process_id) as unique_processes,
          COUNT(DISTINCT request_ip) as unique_ips,
-         MIN(timestamp) as start_time
+         MIN(time_received) as start_time
        FROM metrics_requests`
     )
 
