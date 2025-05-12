@@ -10,10 +10,6 @@ import { redirectWith } from './redirect.js'
 import { metricsMiddleware } from './middleware/metricsMiddleware.js'
 import { mountDashboard } from './routes/dashboard.js'
 import newDashboardRouter from './routes/new-dashboard.js'
-import { recreateMetricsTable } from './database/recreate-metrics-table.js'
-
-// Initialize database logger
-const _logger = logger.child('app-init')
 
 const middlewareWithByStrategy = {
   proxy: proxyWith,
@@ -21,21 +17,6 @@ const middlewareWithByStrategy = {
 }
 
 const middlewareWith = middlewareWithByStrategy[config.strategy]
-
-// Try to initialize/fix the metrics table on startup
-recreateMetricsTable()
-  .then(success => {
-    if (success) {
-      _logger('Metrics table structure verified and recreated if needed');
-    } else {
-      _logger('Warning: Failed to verify metrics table structure');
-      _logger('Some metrics functionality may not work correctly');
-    }
-  })
-  .catch(err => {
-    _logger('Error during metrics table initialization: %O', err);
-    _logger('Continuing app startup despite database error');
-  });
 
 pipe(
   (app) => app.use(cors()),

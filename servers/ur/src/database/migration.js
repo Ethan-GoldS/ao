@@ -67,7 +67,7 @@ export async function runMigrations() {
       _logger('Adding time_received column to metrics_requests table')
       await query(`
         ALTER TABLE metrics_requests 
-        ADD COLUMN time_received TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        ADD COLUMN time_received TIMESTAMPTZ
       `)
       
       // If timestamp exists, copy values to time_received
