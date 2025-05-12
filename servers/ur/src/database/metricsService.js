@@ -64,8 +64,7 @@ export async function storeMetrics(details) {
       action,
       duration,
       timeReceived,
-      timeCompleted,
-      uniqueId // Add unique ID for tracking
+      timeCompleted
     } = details
 
     // Parse JSON body if it's a string
@@ -115,9 +114,8 @@ export async function storeMetrics(details) {
       `INSERT INTO metrics_requests (
         process_id, request_ip, request_referrer, request_method, 
         request_path, request_user_agent, request_origin, request_content_type,
-        request_body, request_raw, response_body, action, duration, time_received, time_completed,
-        unique_id
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+        request_body, request_raw, response_body, action, duration, time_received, time_completed
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
       RETURNING id`,
       [
         processId,
@@ -134,8 +132,7 @@ export async function storeMetrics(details) {
         action || 'unknown',
         duration || 0,
         timeReceived ? new Date(timeReceived) : new Date(),
-        timeCompleted ? new Date(timeCompleted) : new Date(),
-        uniqueId || `${processId}-${Date.now()}-${Math.random().toString(36).substring(2, 8)}` // Include unique tracking ID
+        timeCompleted ? new Date(timeCompleted) : new Date()
       ]
     )
 
@@ -308,41 +305,29 @@ export async function getClientMetrics() {
  */
 export async function getTimeSeriesData(hours = 24) {
   try {
-    // Get available columns first
-    const columnsResult = await query(
+    // Check for existence of time_received column
+    const columnCheck = await query(
       `SELECT column_name 
        FROM information_schema.columns 
        WHERE table_name = 'metrics_requests' 
-       AND column_name IN ('time_received', 'timestamp', 'time_completed')`
+       AND column_name = 'time_received'`
     );
     
-    const availableColumns = columnsResult.rows.map(row => row.column_name);
-    
-    // Choose the best time column available
-    let timeColumn = null;
-    if (availableColumns.includes('time_received')) {
-      timeColumn = 'time_received';
-    } else if (availableColumns.includes('timestamp')) {
-      timeColumn = 'timestamp';
-    } else if (availableColumns.includes('time_completed')) {
-      timeColumn = 'time_completed';
-    }
-    
-    // If we have a time column, attempt to query with it
-    if (timeColumn) {
+    if (columnCheck.rows.length > 0) {
+      // Column exists, use it
       try {
         const result = await query(
           `SELECT 
-             date_trunc('hour', ${timeColumn}) as hour,
+             date_trunc('hour', time_received) as hour,
              COUNT(*) as total_requests,
              jsonb_object_agg(process_id, process_count) as process_counts
            FROM (
              SELECT 
-               date_trunc('hour', ${timeColumn}) as hour,
+               date_trunc('hour', time_received) as hour,
                process_id,
                COUNT(*) as process_count
              FROM metrics_requests
-             WHERE ${timeColumn} > NOW() - interval '${hours} hours'
+             WHERE time_received > NOW() - interval '${hours} hours'
              GROUP BY hour, process_id
              ORDER BY hour, process_count DESC
            ) AS hourly_process_counts
@@ -353,11 +338,51 @@ export async function getTimeSeriesData(hours = 24) {
         );
         return await processTimeSeriesResults(result, hours);
       } catch (err) {
-        // Query failed, try a fallback approach
+        _logger('Error using time_received column: %s', err.message);
+        // Continue to fallback methods
       }
     }
     
-    // Fallback to a simplified query without time filtering
+    // Check for existence of timestamp column
+    const timestampCheck = await query(
+      `SELECT column_name 
+       FROM information_schema.columns 
+       WHERE table_name = 'metrics_requests' 
+       AND column_name = 'timestamp'`
+    );
+    
+    if (timestampCheck.rows.length > 0) {
+      // Column exists, use it
+      try {
+        const result = await query(
+          `SELECT 
+             date_trunc('hour', timestamp) as hour,
+             COUNT(*) as total_requests,
+             jsonb_object_agg(process_id, process_count) as process_counts
+           FROM (
+             SELECT 
+               date_trunc('hour', timestamp) as hour,
+               process_id,
+               COUNT(*) as process_count
+             FROM metrics_requests
+             WHERE timestamp > NOW() - interval '${hours} hours'
+             GROUP BY hour, process_id
+             ORDER BY hour, process_count DESC
+           ) AS hourly_process_counts
+           GROUP BY hour
+           ORDER BY hour ASC`,
+          [], // params
+          10000 // 10 second timeout
+        );
+        return await processTimeSeriesResults(result, hours);
+      } catch (err) {
+        _logger('Error using timestamp column: %s', err.message);
+        // Continue to fallback methods
+      }
+    }
+    
+    // If we get here, neither column exists or both failed, fall back to a simpler query based on ID
+    _logger('Using simplified metrics query without time data');
     try {
       const result = await query(
         `SELECT 
@@ -375,7 +400,7 @@ export async function getTimeSeriesData(hours = 24) {
         10000 // 10 second timeout
       );
       
-      // Generate fake time series data using just the totals
+      // Generate time series data using just the totals
       const timeSeriesData = [];
       const now = new Date();
       const totalRequests = parseInt(result.rows[0]?.total_requests || 0, 10);
@@ -392,48 +417,38 @@ export async function getTimeSeriesData(hours = 24) {
         });
       }
       
+      // Return the generated time series data
       return {
-        hourlyData: timeSeriesData,
-        totals: {
-          totalRequests: totalRequests,
-          totalUniqueProcesses: Object.keys(processCounts).length,
-          byHour: timeSeriesData.map(d => {
-            return {
-              hour: d.hour,
-              requests: d.totalRequests
-            };
-          })
-        },
-        processes: Object.keys(processCounts).map(processId => ({
-          id: processId,
-          count: processCounts[processId]
-        }))
+        timeSeriesData,
+        timeLabels: timeSeriesData.map(d => 
+          new Date(d.timestamp).getUTCHours().toString().padStart(2, '0') + ':00'
+        )
       };
     } catch (innerErr) {
-      // Even the fallback failed, return empty data
+      _logger('Error with simplified query: %s', innerErr.message);
+      throw innerErr; // Bubble up to outer catch
+    }
+  } catch (error) {
+    _logger('Error getting time series data: %O', error);
+    // Generate empty time series data
+    const timeLabels = [];
+    const timeSeriesData = [];
+    const now = new Date();
+    
+    for (let i = hours - 1; i >= 0; i--) {
+      const date = new Date(now.getTime() - i * 60 * 60 * 1000);
+      timeLabels.push(date.getUTCHours().toString().padStart(2, '0') + ':00');
+      
+      const bucketTime = new Date(now.getTime() - i * 60 * 60 * 1000);
+      timeSeriesData.push({
+        timestamp: bucketTime.toISOString(),
+        hour: bucketTime.getUTCHours(),
+        totalRequests: 0,
+        processCounts: {}
+      });
     }
     
-    // If all approaches failed, return empty data
-    return {
-      hourlyData: [],
-      totals: {
-        totalRequests: 0,
-        totalUniqueProcesses: 0,
-        byHour: []
-      },
-      processes: []
-    };
-  } catch (error) {
-    // Return empty dataset on any error
-    return {
-      hourlyData: [],
-      totals: {
-        totalRequests: 0,
-        totalUniqueProcesses: 0,
-        byHour: []
-      },
-      processes: []
-    };
+    return { timeSeriesData, timeLabels };
   }
 }
 

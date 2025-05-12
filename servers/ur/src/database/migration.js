@@ -55,14 +55,12 @@ export async function runMigrations() {
     const hasTimestamp = await columnExists('metrics_requests', 'timestamp')
     const hasRequestRaw = await columnExists('metrics_requests', 'request_raw')
     const hasResponseBody = await columnExists('metrics_requests', 'response_body')
-    const hasUniqueId = await columnExists('metrics_requests', 'unique_id')
     
-    _logger('Column status - time_received: %s, timestamp: %s, request_raw: %s, response_body: %s, unique_id: %s', 
+    _logger('Column status - time_received: %s, timestamp: %s, request_raw: %s, response_body: %s', 
       hasTimeReceived ? 'exists' : 'missing',
       hasTimestamp ? 'exists' : 'missing',
       hasRequestRaw ? 'exists' : 'missing',
-      hasResponseBody ? 'exists' : 'missing',
-      hasUniqueId ? 'exists' : 'missing')
+      hasResponseBody ? 'exists' : 'missing')
     
     // Add time_received column if it doesn't exist
     if (!hasTimeReceived) {
@@ -116,16 +114,6 @@ export async function runMigrations() {
         ADD COLUMN response_body TEXT
       `)
       _logger('response_body column added successfully')
-    }
-    
-    // Add unique_id column if it doesn't exist - NEW COLUMN FOR REQUEST TRACKING
-    if (!hasUniqueId) {
-      _logger('Adding unique_id column to metrics_requests table')
-      await query(`
-        ALTER TABLE metrics_requests 
-        ADD COLUMN unique_id TEXT
-      `)
-      _logger('unique_id column added successfully')
     }
     
     _logger('Database migrations completed successfully')

@@ -67,7 +67,7 @@ export function metricsMiddleware() {
       
       if (lastTracked && (Date.now() - lastTracked < 1000)) {
         // This appears to be a duplicate request (same process, method, path within 1 second)
-        // Skip silently without logging to reduce verbosity
+        _logger('Skipping duplicate metrics tracking for %s (already tracked %dms ago)', processId, Date.now() - lastTracked);
         return next();
       }
       
@@ -193,12 +193,9 @@ export function metricsMiddleware() {
     const hrstart = process.hrtime ? process.hrtime() : null;
     const startTimeMs = Date.now();
     
-    // Generate a unique tracking ID for this request
-    const uniqueTrackingId = `${processId || 'unknown'}-${Date.now()}-${Math.random().toString(36).substring(2, 10)}`;
-    
-    // Reduced logging - only log basic request info
-    _logger('Tracking request %s: %s %s', 
-      uniqueTrackingId.substring(0, 12), req.method, req.path);
+    // Log the request start with detailed timing information
+    _logger('Request tracking started for process %s at %d, path: %s, method: %s', 
+      processId, startTimeMs, req.path, req.method);
     
     // Start tracking request for performance metrics
     const tracking = {
@@ -209,12 +206,8 @@ export function metricsMiddleware() {
       path: req.path, // Include path for better diagnostics
       method: req.method, // Include method for better diagnostics
       rawBody: rawRequestData, // Include raw request data in tracking
-      timeCreated: new Date().toISOString(), // Exact ISO timestamp for debugging
-      uniqueId: uniqueTrackingId // Add the unique tracking ID
+      timeCreated: new Date().toISOString() // Exact ISO timestamp for debugging
     };
-    
-    // Store the tracking ID on the request for other middleware
-    req._metricsTrackingId = uniqueTrackingId;
     
     // Capture original end method to intercept when response is sent
     const originalEnd = res.end;

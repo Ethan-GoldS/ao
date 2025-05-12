@@ -172,26 +172,23 @@ export function generateRecentRequestsTable(recentRequests, requestDetails) {
     // Create detailed dropdown content
     const detailsHtml = `
       <div class="details-content">
-        <div class="details-section">
-          <h4>Request Details</h4>
-          <p><strong>Process ID:</strong> ${req.processId || req.process_id}</p>
-          <p><strong>Tracking ID:</strong> <span class="tracking-id">${req.unique_id || 'Not available'}</span></p>
-          <p><strong>Time Received:</strong> ${formatTimestamp(req.time_received)}</p>
-          <p><strong>Method:</strong> ${req.request_method || req.method || 'unknown'}</p>
-          <p><strong>Path:</strong> ${req.request_path || req.path || 'unknown'}</p>
-          <p><strong>IP Address:</strong> ${req.request_ip || req.ip || 'unknown'}</p>
-          <p><strong>User Agent:</strong> ${req.request_user_agent || req.userAgent || 'unknown'}</p>
-          <p><strong>Referrer:</strong> ${req.request_referrer || req.referer || 'unknown'}</p>
-          <p><strong>Origin:</strong> ${req.request_origin || req.origin || 'unknown'}</p>
-          <p><strong>Content Type:</strong> ${req.request_content_type || req.contentType || 'unknown'}</p>
-          <p><strong>Action:</strong> ${req.action || 'unknown'}</p>
-          <p><strong>Duration:</strong> ${req.duration || 0}ms</p>
-          <table>
-            <tr><td>Request Body:</td><td>${requestBodyHtml}</td></tr>
-            <tr><td>Raw Request:</td><td>${rawRequestHtml}</td></tr>
-            <tr><td>Response Body:</td><td>${responseBodyHtml}</td></tr>
-          </table>
-        </div>
+        <h4>Request Details</h4>
+        <table class="details-table">
+          <tr><td>Process ID:</td><td><code>${req.process_id || req.processId || 'N/A'}</code></td></tr>
+          <tr><td>Time Received:</td><td>${formattedTimestamp}</td></tr>
+          <tr><td>Method:</td><td>${req.request_method || detail?.method || 'N/A'}</td></tr>
+          <tr><td>Path:</td><td>${req.request_path || detail?.path || 'N/A'}</td></tr>
+          <tr><td>IP Address:</td><td>${req.request_ip || detail?.ip || 'N/A'}</td></tr>
+          <tr><td>User Agent:</td><td>${req.request_user_agent || detail?.userAgent || 'N/A'}</td></tr>
+          <tr><td>Referrer:</td><td>${req.request_referrer || detail?.referer || 'N/A'}</td></tr>
+          <tr><td>Origin:</td><td>${req.request_origin || detail?.origin || 'N/A'}</td></tr>
+          <tr><td>Content Type:</td><td>${req.request_content_type || detail?.contentType || 'N/A'}</td></tr>
+          <tr><td>Action:</td><td><strong>${req.action || 'N/A'}</strong></td></tr>
+          <tr><td>Duration:</td><td>${req.duration || '0'}ms</td></tr>
+          <tr><td>Request Body:</td><td>${requestBodyHtml}</td></tr>
+          <tr><td>Raw Request:</td><td>${rawRequestHtml}</td></tr>
+          <tr><td>Response Body:</td><td>${responseBodyHtml}</td></tr>
+        </table>
       </div>
     `;
     
@@ -200,16 +197,8 @@ export function generateRecentRequestsTable(recentRequests, requestDetails) {
         <td>${formattedTimestamp}</td>
         <td>
           <details>
-            <div class="request-header" data-bs-toggle="collapse" href="#requestDetails${index}" role="button" aria-expanded="false">
-              <div class="timestamp">${formatTimestamp(req.time_received)}</div>
-              <div class="process-id" title="${req.process_id}">${req.process_id.substring(0, 12)}...</div>
-              <div class="action">${req.action}</div>
-              <div class="client-ip">${req.request_ip}</div>
-              <div class="duration">${req.duration}ms</div>
-              ${req.unique_id ? `<div class="unique-id" title="Tracking ID: ${req.unique_id}">ID: ${req.unique_id.substring(0, 8)}...</div>` : ''}
-              <button class="copy-id-btn" data-process-id="${req.process_id}">Copy ID</button>
-            </div>
-            <div id="requestDetails${index}" class="collapse">
+            <summary>${(req.process_id || req.processId || '').substring(0, 12)}...</summary>
+            <div class="process-details">
               ${detailsHtml}
             </div>
           </details>
