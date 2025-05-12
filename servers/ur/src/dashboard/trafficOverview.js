@@ -238,13 +238,75 @@ export function getTrafficOverviewStyles() {
       color: #2c3e50;
     }
     
-    .action-tag {
+    .action-tags-container {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+      position: relative;
+    }
+    
+    .action-tooltip {
       display: inline-block;
-      padding: 2px 8px;
+      position: relative;
+      margin-right: 8px;
+      cursor: help;
+    }
+    
+    .action-tooltip-text {
+      visibility: hidden;
+      width: 250px;
+      background-color: #555;
+      color: #fff;
+      text-align: center;
+      border-radius: 6px;
+      padding: 5px;
+      position: absolute;
+      z-index: 1;
+      bottom: 125%;
+      left: 50%;
+      margin-left: -125px;
+      opacity: 0;
+      transition: opacity 0.3s;
+      font-size: 0.8rem;
+    }
+    
+    .action-tooltip:hover .action-tooltip-text {
+      visibility: visible;
+      opacity: 1;
+    }
+    
+    .action-tag {
+      display: inline-flex;
+      align-items: center;
+      padding: 3px 10px;
       margin: 2px;
       border-radius: 12px;
       font-size: 0.8rem;
       background-color: #e9ecef;
+    }
+    
+    .action-name {
+      font-weight: 500;
+      margin-right: 5px;
+    }
+    
+    .action-count {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background-color: #3498db;
+      color: white;
+      border-radius: 50%;
+      min-width: 20px;
+      height: 20px;
+      padding: 0 4px;
+      font-size: 0.75rem;
+      font-weight: bold;
+    }
+    
+    .no-actions {
+      color: #6c757d;
+      font-style: italic;
     }
     
     .refresh-interval-group {
@@ -615,6 +677,13 @@ export function getTrafficOverviewScript() {
     
     // Update traffic chart and table with new data
     function updateTrafficVisualization(chart, data, graceful = false) {
+      // Check if chart is valid
+      if (!chart || !chart.data) {
+        console.error('Invalid chart object');
+        return;
+      }
+      
+      // Validate received data
       if (!data || !data.trafficData || !Array.isArray(data.trafficData) || data.error) {
         if (!graceful) {
           showErrorMessage(data.error || 'Invalid data received from server');
@@ -624,7 +693,20 @@ export function getTrafficOverviewScript() {
       
       // Extract data for chart
       const timeLabels = data.timeLabels || [];
-      const requestCounts = data.trafficData.map(item => item.request_count);
+      const requestCounts = data.trafficData.map(item => item.request_count || 0);
+      
+      // Ensure chart data structure exists
+      if (!chart.data.datasets || !chart.data.datasets[0]) {
+        chart.data.datasets = [{
+          label: 'Requests',
+          data: [],
+          borderColor: 'rgb(54, 162, 235)',
+          backgroundColor: 'rgba(54, 162, 235, 0.2)',
+          fill: true,
+          tension: 0.2,
+          borderWidth: 2
+        }];
+      }
       
       if (graceful) {
         // Graceful transition - use animation
@@ -700,7 +782,7 @@ export function getTrafficOverviewScript() {
       }
       
       // Add rows for each time bucket (newest first)
-      trafficData.slice().reverse().forEach(data => {
+      trafficData.slice().reverse().forEach(function(data) {
         const row = document.createElement('tr');
         
         // Time column
@@ -717,20 +799,43 @@ export function getTrafficOverviewScript() {
         const actionsCell = document.createElement('td');
         const actionCounts = data.action_counts || {};
         
+        // Create a container for action tags with title
+        const actionContainer = document.createElement('div');
+        actionContainer.className = 'action-tags-container';
+        
+        // Add an explanation tooltip
+        const actionTooltip = document.createElement('div');
+        actionTooltip.className = 'action-tooltip';
+        actionTooltip.innerHTML = '<i class="bi bi-info-circle"></i><span class="action-tooltip-text">The number next to each action represents the count of requests with that action type during this time period.</span>';
+        actionContainer.appendChild(actionTooltip);
+        
         // Create action tags
-        Object.entries(actionCounts).forEach(([action, count]) => {
+        Object.entries(actionCounts).forEach(function([action, count]) {
           if (action && action !== 'null' && action !== 'undefined') {
             const actionTag = document.createElement('span');
             actionTag.classList.add('action-tag');
-            actionTag.textContent = action + ': ' + count;
-            actionsCell.appendChild(actionTag);
+            
+            // Create a more descriptive format
+            const actionName = document.createElement('span');
+            actionName.className = 'action-name';
+            actionName.textContent = action;
+            
+            const actionCount = document.createElement('span');
+            actionCount.className = 'action-count';
+            actionCount.textContent = count;
+            
+            actionTag.appendChild(actionName);
+            actionTag.appendChild(actionCount);
+            
+            actionContainer.appendChild(actionTag);
           }
         });
         
-        if (actionsCell.children.length === 0) {
-          actionsCell.textContent = 'None';
+        if (Object.keys(actionCounts).length === 0) {
+          actionContainer.innerHTML += '<span class="no-actions">None</span>';
         }
         
+        actionsCell.appendChild(actionContainer);
         row.appendChild(actionsCell);
         tableBody.appendChild(row);
       });
