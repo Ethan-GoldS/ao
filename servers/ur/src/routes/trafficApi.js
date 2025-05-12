@@ -5,7 +5,6 @@
 import express from 'express';
 import { logger } from '../logger.js';
 import { query } from '../database/db.js';
-import { format } from 'date-fns';
 
 const router = express.Router();
 const _logger = logger.child('trafficApi');
@@ -153,7 +152,7 @@ async function getTrafficData(timeRange, timeInterval, processFilter) {
       
       return {
         timestamp: bucketTime.toISOString(),
-        formattedTime: format(bucketTime, "MMM d, HH:mm:ss"),
+        formattedTime: formatDate(bucketTime),
         requestCount: parseInt(row.request_count, 10),
         uniqueProcessCount: parseInt(row.unique_process_count, 10),
         requestRate: parseFloat(row.request_rate),
@@ -208,6 +207,28 @@ router.get('/traffic-data', async (req, res) => {
 export function mountTrafficApi(app) {
   _logger('Mounting traffic API routes');
   app.use('/api', router);
+}
+
+/**
+ * Format a date object into a readable string
+ * @param {Date} date - Date to format
+ * @returns {string} Formatted date string
+ */
+function formatDate(date) {
+  if (!date) return '';
+  
+  try {
+    const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const month = monthNames[date.getMonth()];
+    const day = date.getDate();
+    const hours = String(date.getHours()).padStart(2, '0');
+    const minutes = String(date.getMinutes()).padStart(2, '0');
+    const seconds = String(date.getSeconds()).padStart(2, '0');
+    
+    return `${month} ${day}, ${hours}:${minutes}:${seconds}`;
+  } catch (err) {
+    return date.toISOString();
+  }
 }
 
 export default router;
