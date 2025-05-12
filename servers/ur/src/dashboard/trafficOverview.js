@@ -265,6 +265,22 @@ export function getTrafficOverviewStyles() {
  */
 export function getTrafficOverviewScript() {
   return `
+    // Global function for external references
+    function initializeTimeChart() {
+      console.log('Legacy initializeTimeChart called - using new traffic overview implementation');
+      // If chart already exists, just refresh data
+      if (window.trafficChart) {
+        loadTrafficData(window.trafficChart);
+      } else {
+        // Otherwise wait for DOM to be ready and initialize
+        document.addEventListener('DOMContentLoaded', () => {
+          if (document.getElementById('trafficChart')) {
+            initializeTrafficOverview();
+          }
+        });
+      }
+    }
+    
     // Traffic Overview initialization
     function initializeTrafficOverview() {
       // Set up Chart.js configuration
@@ -328,9 +344,13 @@ export function getTrafficOverviewScript() {
       // Load process ID suggestions
       loadProcessIdSuggestions();
       
+      // Store chart in window for potential external access
+      window.trafficChart = trafficChart;
+      
       // Setup auto-refresh timer (every 30 seconds)
       let autoRefreshTimer = setInterval(() => {
-        if (document.getElementById('autoRefresh').checked) {
+        const autoRefreshEl = document.getElementById('autoRefresh');
+        if (autoRefreshEl && autoRefreshEl.checked) {
           loadTrafficData(trafficChart);
         }
       }, 30000);
