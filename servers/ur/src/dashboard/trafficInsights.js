@@ -79,17 +79,17 @@ export function generateTrafficInsightsHtml(timeSeriesData) {
 export function getTrafficInsightsScript(rawTimeData) {
   return `
     // Store and preprocess the raw time data
-    const rawTimeData = ${JSON.stringify(rawTimeData || [])};
+    const timeSeriesRawData = ${JSON.stringify(rawTimeData || [])};
     
     // Check if we have valid time data
-    const hasTimeData = Array.isArray(rawTimeData) && rawTimeData.length > 0;
+    const hasTimeData = Array.isArray(timeSeriesRawData) && timeSeriesRawData.length > 0;
     
     // Prepare the traffic insights chart
     let trafficChart = null;
     
     // Process the time data into a usable format
-    function processTimeData(rawData, groupBy = 'hour') {
-      if (!rawData || !Array.isArray(rawData) || rawData.length === 0) {
+    function processTimeData(data, groupBy = 'hour') {
+      if (!data || !Array.isArray(data) || data.length === 0) {
         console.log('No time series data available');
         return { 
           labels: [], 
@@ -104,7 +104,7 @@ export function getTrafficInsightsScript(rawTimeData) {
       }
     
       // Convert timestamp strings to Date objects
-      const timeData = rawData.map(item => ({
+      const timeData = data.map(item => ({
         ...item,
         timestamp: new Date(item.timestamp)
       }));
@@ -204,7 +204,7 @@ export function getTrafficInsightsScript(rawTimeData) {
       const now = new Date();
       const rangeStart = new Date(now.getTime() - (timeRange * 60 * 60 * 1000));
       
-      const filteredData = rawTimeData.filter(item => {
+      const filteredData = timeSeriesRawData.filter(item => {
         const timestamp = new Date(item.timestamp);
         return timestamp >= rangeStart;
       });
@@ -264,10 +264,10 @@ export function getTrafficInsightsScript(rawTimeData) {
       });
     }
     
-    // Initialize the chart when the page loads
+    // Initialize traffic insights when DOM is loaded
     document.addEventListener('DOMContentLoaded', function() {
-      // Only set up the chart if we have time data
-      if (hasTimeData) {
+      // Only initialize if we have data
+      if (hasTimeData && Array.isArray(timeSeriesRawData) && timeSeriesRawData.length > 0) {
         // Render the initial chart
         renderTrafficInsightsChart();
         
