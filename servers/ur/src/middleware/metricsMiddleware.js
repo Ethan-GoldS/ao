@@ -67,7 +67,7 @@ export function metricsMiddleware() {
       
       if (lastTracked && (Date.now() - lastTracked < 1000)) {
         // This appears to be a duplicate request (same process, method, path within 1 second)
-        _logger('Skipping duplicate metrics tracking for %s (already tracked %dms ago)', processId, Date.now() - lastTracked);
+        // Skip silently without logging to reduce verbosity
         return next();
       }
       
