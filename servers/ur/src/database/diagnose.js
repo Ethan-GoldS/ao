@@ -141,7 +141,6 @@ async function diagnoseDatabase() {
         id, 
         process_id, 
         CASE WHEN time_received IS NOT NULL THEN 'present' ELSE 'null' END as time_received_status,
-        CASE WHEN timestamp IS NOT NULL THEN 'present' ELSE 'null' END as timestamp_status,
         action,
         duration
       FROM metrics_requests
@@ -155,8 +154,8 @@ async function diagnoseDatabase() {
     if (sampleCheck.rows.length > 0) {
       _logger('Sample data in metrics_requests:');
       sampleCheck.rows.forEach(row => {
-        _logger('  - ID: %s, Process: %s, time_received: %s, timestamp: %s, action: %s, duration: %s',
-          row.id, row.process_id, row.time_received_status, row.timestamp_status, row.action, row.duration);
+        _logger('  - ID: %s, Process: %s, time_received: %s, action: %s, duration: %s',
+          row.id, row.process_id, row.time_received_status, row.action, row.duration);
       });
     } else {
       _logger('No sample data found or error querying');

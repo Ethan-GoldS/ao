@@ -169,7 +169,7 @@ export async function getRecentRequests(limit = 100) {
       rawBody: row.request_raw, // Include both formats for compatibility
       action: row.action,
       duration: row.duration,
-      timestamp: row.time_received || row.timestamp, // Use time_received if available, timestamp as fallback
+      timestamp: row.time_received,
       time_received: row.time_received,
       timeReceived: row.time_received,
       time_completed: row.time_completed,
@@ -332,8 +332,8 @@ export async function getTimeSeriesData(hours = 24) {
         // Try a simpler query first to verify column access
         const simpleCheck = await query(
           `SELECT 
-             MIN("time_received") as min_time,
-             MAX("time_received") as max_time, 
+             MIN(time_received) as min_time,
+             MAX(time_received) as max_time, 
              COUNT(*) as count
            FROM metrics_requests
            LIMIT 1`
@@ -351,17 +351,17 @@ export async function getTimeSeriesData(hours = 24) {
         // Now try the main query with quoted column names
         const result = await query(
           `SELECT 
-             date_trunc('hour', "time_received") as hour,
+             date_trunc('hour', time_received) as hour,
              COUNT(*) as total_requests,
-             jsonb_object_agg("process_id", process_count) as process_counts
+             jsonb_object_agg(process_id, process_count) as process_counts
            FROM (
              SELECT 
-               date_trunc('hour', "time_received") as hour,
-               "process_id",
+               date_trunc('hour', time_received) as hour,
+               process_id,
                COUNT(*) as process_count
              FROM metrics_requests
-             WHERE "time_received" > NOW() - interval '${hours} hours'
-             GROUP BY hour, "process_id"
+             WHERE time_received > NOW() - interval '${hours} hours'
+             GROUP BY hour, process_id
              ORDER BY hour, process_count DESC
            ) AS hourly_process_counts
            GROUP BY hour
@@ -376,43 +376,7 @@ export async function getTimeSeriesData(hours = 24) {
       }
     }
     
-    // Check for existence of timestamp column
-    const timestampCheck = await query(
-      `SELECT column_name 
-       FROM information_schema.columns 
-       WHERE table_name = 'metrics_requests' 
-       AND column_name = 'timestamp'`
-    );
-    
-    if (timestampCheck.rows.length > 0) {
-      // Column exists, use it
-      try {
-        const result = await query(
-          `SELECT 
-             date_trunc('hour', timestamp) as hour,
-             COUNT(*) as total_requests,
-             jsonb_object_agg(process_id, process_count) as process_counts
-           FROM (
-             SELECT 
-               date_trunc('hour', timestamp) as hour,
-               process_id,
-               COUNT(*) as process_count
-             FROM metrics_requests
-             WHERE timestamp > NOW() - interval '${hours} hours'
-             GROUP BY hour, process_id
-             ORDER BY hour, process_count DESC
-           ) AS hourly_process_counts
-           GROUP BY hour
-           ORDER BY hour ASC`,
-          [], // params
-          10000 // 10 second timeout
-        );
-        return await processTimeSeriesResults(result, hours);
-      } catch (err) {
-        _logger('Error using timestamp column: %s', err.message);
-        // Continue to fallback methods
-      }
-    }
+    // We now only have time_received, no need to check for timestamp column
     
     // If we get here, neither column exists or both failed, fall back to a simpler query based on ID
     _logger('Using simplified metrics query without time data');
