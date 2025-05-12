@@ -78,7 +78,7 @@ export async function storeMetrics(details) {
         }
       }
     }
-    
+
     // Check if table has request_raw column before inserting
     const result = await query(
       `INSERT INTO metrics_requests (
@@ -106,10 +106,26 @@ export async function storeMetrics(details) {
       ]
     )
 
-    _logger('Stored metrics for process %s with ID %d', processId, result.rows[0]?.id)
+    const id = result.rows[0]?.id
+    _logger('Successfully stored metrics for process %s with ID %d', processId, id)
+
+    // Verify the data was actually inserted
+    try {
+      const verifyResult = await query('SELECT * FROM metrics_requests WHERE id = $1', [id])
+      if (verifyResult.rows.length > 0) {
+        const row = verifyResult.rows[0]
+        _logger('Verified stored metrics - process_id: %s, time_received: %s', 
+          row.process_id, row.time_received)
+      } else {
+        _logger('WARNING: Could not verify stored metrics with ID %d - record not found', id)
+      }
+    } catch (verifyErr) {
+      _logger('WARNING: Error verifying stored metrics: %O', verifyErr)
+    }
+
     return true
   } catch (error) {
-    _logger('Error storing metrics: %O', error)
+    _logger('ERROR: Failed to store metrics: %O', error)
     return false
   }
 }
@@ -275,6 +291,30 @@ export async function getClientMetrics() {
  */
 export async function getTimeSeriesData(hours = 24) {
   try {
+    // Detailed logging of database schema
+    _logger('Running detailed schema check for time series data...');
+    try {
+      const tableCheck = await query(
+        `SELECT table_schema, table_name
+         FROM information_schema.tables
+         WHERE table_name = 'metrics_requests'`
+      );
+      _logger('Found metrics_requests table in schemas: %O', 
+        tableCheck.rows.map(row => row.table_schema));
+              
+      // Get all columns for the table
+      const allColumns = await query(
+        `SELECT column_name, data_type
+         FROM information_schema.columns
+         WHERE table_name = 'metrics_requests'
+         ORDER BY ordinal_position`
+      );
+      _logger('Available columns for metrics_requests: %O', 
+        allColumns.rows.map(row => `${row.column_name} (${row.data_type})`));
+    } catch (schemaErr) {
+      _logger('ERROR checking schema details: %O', schemaErr);
+    }
+  
     // Check for existence of time_received column
     const columnCheck = await query(
       `SELECT column_name 
@@ -283,9 +323,12 @@ export async function getTimeSeriesData(hours = 24) {
        AND column_name = 'time_received'`
     );
     
+    _logger('time_received column exists: %s', columnCheck.rows.length > 0);
+    
     if (columnCheck.rows.length > 0) {
       // Column exists, use it
       try {
+        _logger('Attempting to query using time_received column...');
         const result = await query(
           `SELECT 
              date_trunc('hour', time_received) as hour,

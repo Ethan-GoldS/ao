@@ -34,7 +34,19 @@ async function columnExists(tableName, columnName) {
  */
 export async function runMigrations() {
   try {
-    _logger('Running database migrations...')
+    _logger('Starting database schema migration process...')
+    
+    // Check current database name and schema
+    try {
+      const dbInfoResult = await query(`
+        SELECT current_database() as db_name, current_schema() as schema_name
+      `)
+      _logger('Running migrations on database: %s, schema: %s', 
+        dbInfoResult.rows[0].db_name, 
+        dbInfoResult.rows[0].schema_name)
+    } catch (dbInfoErr) {
+      _logger('ERROR: Failed to get database information: %O', dbInfoErr)
+    }
     
     // Check if metrics_requests table exists
     const tableResult = await query(`
@@ -44,6 +56,7 @@ export async function runMigrations() {
     `)
     
     const tableExists = tableResult.rows.length > 0
+    _logger('metrics_requests table exists: %s', tableExists)
     
     if (!tableExists) {
       _logger('metrics_requests table does not exist, skipping migrations')

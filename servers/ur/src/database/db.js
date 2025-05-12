@@ -14,6 +14,8 @@ const { Pool } = pg
 const DEFAULT_TIMEOUT_MS = 15000
 
 // Create a new PostgreSQL connection pool using DB_URL from config
+_logger('Initializing database connection pool with URL: %s', config.dbUrl.replace(/\/\/.*?:.*?@/, '//***:***@')); // Log URL with credentials hidden
+
 const pool = new Pool({
   connectionString: config.dbUrl,
   max: 20, // Maximum number of clients in the pool
@@ -21,8 +23,12 @@ const pool = new Pool({
   connectionTimeoutMillis: 5000, // Return an error after 5 seconds if connection not established
 })
 
+pool.on('connect', client => {
+  _logger('New database connection established')
+})
+
 pool.on('error', (err) => {
-  _logger('Unexpected error on idle client', err)
+  _logger('Unexpected error on idle client: %O', err)
 })
 
 /**
@@ -68,7 +74,16 @@ export async function query(text, params = [], timeoutMs = DEFAULT_TIMEOUT_MS) {
  */
 export async function initializeDatabase() {
   try {
-    _logger('Initializing database...')
+    _logger('Starting database initialization...')
+    
+    // Test the database connection first
+    try {
+      const testResult = await query('SELECT NOW() as time')
+      _logger('Database connection test successful: %s', testResult.rows[0].time)
+    } catch (connError) {
+      _logger('ERROR: Database connection test failed: %O', connError)
+      // Continue anyway to see if we can fix it
+    }
     
     // Define a timeout for the initialization
     const initTimeoutPromise = new Promise((_, reject) => {
@@ -78,19 +93,40 @@ export async function initializeDatabase() {
     })
     
     // Database initialization with timeout
+    _logger('Creating database schema if it doesn\'t exist')
     await Promise.race([
       initDatabaseSchema(),
       initTimeoutPromise
     ])
     
+    // Test if the table was created
+    try {
+      const tableTest = await query(
+        'SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = $1)',
+        ['metrics_requests']
+      )
+      _logger('metrics_requests table exists: %s', tableTest.rows[0].exists)
+      
+      // List all columns in the table
+      const columnsResult = await query(
+        'SELECT column_name, data_type FROM information_schema.columns WHERE table_name = $1',
+        ['metrics_requests']
+      )
+      
+      _logger('metrics_requests table columns: %O', columnsResult.rows.map(row => `${row.column_name} (${row.data_type})`))
+    } catch (tableErr) {
+      _logger('ERROR: Failed to check table existence: %O', tableErr)
+    }
+    
     // Run migrations to fix any schema mismatches
+    _logger('Running database migrations...')
     const { runMigrations } = await import('./migration.js')
     await runMigrations()
     
     _logger('Database initialization complete')
     return true
   } catch (error) {
-    _logger('Error initializing database: %O', error)
+    _logger('ERROR: Failed to initialize database: %O', error)
     // Don't throw here - we want to continue even if DB setup fails
     // The application should still work but metrics won't be stored
     return false
