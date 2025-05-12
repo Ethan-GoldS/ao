@@ -691,7 +691,6 @@ export function getTrafficOverviewScript() {
       
       // Get filter values
       const timeRange = document.getElementById('timeRangeSelector').value;
-      const interval = document.getElementById('intervalSelector').value;
       const processIdFilter = document.getElementById('processIdFilter').value;
       
       // Get date range
@@ -709,9 +708,31 @@ export function getTrafficOverviewScript() {
       const startParam = startTime.toISOString();
       const endParam = endTime.toISOString();
       
-      // Get the selected interval
-      const selectedInterval = document.getElementById('intervalSelector').value;
-      console.log('Using interval for API request:', selectedInterval);
+      // Get the selected interval and verify it's appropriate for the time range
+      let selectedInterval = document.getElementById('intervalSelector').value;
+      
+      // Calculate time difference in minutes
+      const timeDiffMins = Math.round((endTime - startTime) / (1000 * 60));
+      
+      // Auto-adjust interval if it's too granular for the selected time range
+      if (timeDiffMins > 1440 && ['5sec', '15sec', '30sec', '1min', '5min'].includes(selectedInterval)) {
+        // For ranges over 24 hours, use at least 30 min intervals
+        selectedInterval = '30min';
+        document.getElementById('intervalSelector').value = selectedInterval;
+        console.log('Auto-adjusted interval to 30min for time range over 24 hours');
+      } else if (timeDiffMins > 720 && ['5sec', '15sec', '30sec'].includes(selectedInterval)) {
+        // For ranges over 12 hours, use at least 5 min intervals
+        selectedInterval = '5min';
+        document.getElementById('intervalSelector').value = selectedInterval;
+        console.log('Auto-adjusted interval to 5min for time range over 12 hours');
+      } else if (timeDiffMins > 180 && ['5sec', '15sec'].includes(selectedInterval)) {
+        // For ranges over 3 hours, use at least 30 sec intervals
+        selectedInterval = '30sec';
+        document.getElementById('intervalSelector').value = selectedInterval;
+        console.log('Auto-adjusted interval to 30sec for time range over 3 hours');
+      }
+      
+      console.log('Using interval ' + selectedInterval + ' for time range of ' + timeDiffMins + ' minutes');
       
       // Construct API URL
       let url = '/api/traffic-data?startTime=' + encodeURIComponent(startParam) + 
@@ -747,45 +768,51 @@ export function getTrafficOverviewScript() {
         });
     }
     
-    // Calculate start time based on time range
+    // Calculate start time based on time range using millisecond precision
     function calculateStartTime(endTime, timeRange) {
-      const startTime = new Date(endTime);
+      // Create a new date object to avoid modifying the original
+      const startTime = new Date(endTime.getTime());
+      const MS_PER_MINUTE = 60 * 1000;
+      const MS_PER_HOUR = 60 * MS_PER_MINUTE;
+      const MS_PER_DAY = 24 * MS_PER_HOUR;
       
+      // Use precise millisecond calculations for all time ranges
       switch(timeRange) {
         case '1min':
-          startTime.setMinutes(endTime.getMinutes() - 1);
+          startTime.setTime(endTime.getTime() - (1 * MS_PER_MINUTE));
           break;
         case '5min':
-          startTime.setMinutes(endTime.getMinutes() - 5);
+          startTime.setTime(endTime.getTime() - (5 * MS_PER_MINUTE));
           break;
         case '15min':
-          startTime.setMinutes(endTime.getMinutes() - 15);
+          startTime.setTime(endTime.getTime() - (15 * MS_PER_MINUTE));
           break;
         case '30min':
-          startTime.setMinutes(endTime.getMinutes() - 30);
+          startTime.setTime(endTime.getTime() - (30 * MS_PER_MINUTE));
           break;
         case '1hour':
-          startTime.setHours(endTime.getHours() - 1);
+          startTime.setTime(endTime.getTime() - MS_PER_HOUR);
           break;
         case '3hour':
-          startTime.setHours(endTime.getHours() - 3);
+          startTime.setTime(endTime.getTime() - (3 * MS_PER_HOUR));
           break;
         case '6hour':
-          startTime.setHours(endTime.getHours() - 6);
+          startTime.setTime(endTime.getTime() - (6 * MS_PER_HOUR));
           break;
         case '12hour':
-          // Fix the 12-hour limit by ensuring we go back full 12 hours
-          startTime.setTime(endTime.getTime() - (12 * 60 * 60 * 1000));
+          startTime.setTime(endTime.getTime() - (12 * MS_PER_HOUR));
           break;
         case '1day':
-          startTime.setTime(endTime.getTime() - (24 * 60 * 60 * 1000));
+          startTime.setTime(endTime.getTime() - MS_PER_DAY);
           break;
         case '7day':
-          startTime.setTime(endTime.getTime() - (7 * 24 * 60 * 60 * 1000));
+          startTime.setTime(endTime.getTime() - (7 * MS_PER_DAY));
           break;
         default:
-          startTime.setHours(endTime.getHours() - 1); // Default to 1 hour
+          startTime.setTime(endTime.getTime() - MS_PER_HOUR); // Default to 1 hour
       }
+      
+      console.log('Time range: ' + timeRange + ' - Start: ' + startTime.toISOString() + ' - End: ' + endTime.toISOString());
       
       return startTime;
     }

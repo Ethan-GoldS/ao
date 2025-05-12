@@ -35,30 +35,31 @@ export async function getTrafficData(options) {
       processIdFilter || 'none'
     );
 
-    // Convert interval to PostgreSQL interval format
-    const pgInterval = convertToPgInterval(interval);
+    // Get interval configuration including PostgreSQL interval and truncation level
+    const intervalConfig = getIntervalConfig(interval);
     
-    _logger('Using PostgreSQL interval: %s for requested interval: %s', pgInterval, interval);
+    _logger('Using PostgreSQL interval: %s for requested interval: %s with truncation to %s', 
+      intervalConfig.pgInterval, interval, intervalConfig.truncateTo);
     
     // Calculate time difference in minutes for logging
     const timeDiffMins = Math.round((endTime - startTime) / (1000 * 60));
     _logger('Time range requested: %d minutes (%d hours)', timeDiffMins, timeDiffMins/60);
     
-    // Prepare new query using proper bucketing first, then counting actions
+    // Prepare new query using proper bucketing with date_trunc for precise interval control
     let sql = `
       WITH time_buckets AS (
         SELECT 
-          time_bucket($1::interval, time_received) AS bucket_time,
+          date_trunc($1, time_bucket($2::interval, time_received)) AS bucket_time,
           action,
           process_id
         FROM metrics_requests
-        WHERE time_received BETWEEN $2 AND $3
+        WHERE time_received BETWEEN $3 AND $4
     `;
 
     // Add process ID filter if provided
-    const params = [pgInterval, startTime, endTime];
+    const params = [intervalConfig.truncateTo, intervalConfig.pgInterval, startTime, endTime];
     if (processIdFilter) {
-      sql += ` AND process_id LIKE $4 `;
+      sql += ` AND process_id LIKE $5 `;
       params.push(`%${processIdFilter}%`);
     }
 
@@ -84,11 +85,11 @@ export async function getTrafficData(options) {
       ORDER BY bucket_time ASC
     `;
 
-    // Execute the query with timeout
+    // Execute the query with timeout (15 seconds)
     const result = await query(sql, params, 15000);
 
     // Process and return the results
-    const trafficData = processTrafficResults(result.rows, interval);
+    const trafficData = processTrafficResults(result.rows, interval, intervalConfig.formatType);
     return trafficData;
     
   } catch (error) {
@@ -102,30 +103,95 @@ export async function getTrafficData(options) {
 }
 
 /**
- * Convert user-friendly interval to PostgreSQL interval string
+ * Convert user-friendly interval to PostgreSQL interval string and get appropriate format
  * @param {String} interval User-friendly interval
- * @returns {String} PostgreSQL interval
+ * @returns {Object} PostgreSQL interval and format information
  */
-function convertToPgInterval(interval) {
-  const intervalMap = {
-    '5sec': '5 seconds',
-    '15sec': '15 seconds',
-    '30sec': '30 seconds',
-    '1min': '1 minute',
-    '5min': '5 minutes',
-    '10min': '10 minutes',
-    '15min': '15 minutes',
-    '30min': '30 minutes',
-    '1hour': '1 hour',
-    '3hour': '3 hours',
-    '6hour': '6 hours',
-    '12hour': '12 hours',
-    '1day': '1 day'
+function getIntervalConfig(interval) {
+  // Define the mapping for all supported intervals
+  const intervalConfigs = {
+    // Seconds-based intervals
+    '5sec': { 
+      pgInterval: '5 seconds', 
+      truncateTo: 'second',
+      formatType: 'time_with_seconds'
+    },
+    '15sec': { 
+      pgInterval: '15 seconds', 
+      truncateTo: 'second',
+      formatType: 'time_with_seconds'
+    },
+    '30sec': { 
+      pgInterval: '30 seconds', 
+      truncateTo: 'second',
+      formatType: 'time_with_seconds'
+    },
+    
+    // Minutes-based intervals
+    '1min': { 
+      pgInterval: '1 minute', 
+      truncateTo: 'minute',
+      formatType: 'time_with_seconds'
+    },
+    '5min': { 
+      pgInterval: '5 minutes', 
+      truncateTo: 'minute',
+      formatType: 'time_with_seconds'
+    },
+    '10min': { 
+      pgInterval: '10 minutes', 
+      truncateTo: 'minute',
+      formatType: 'time_with_seconds'
+    },
+    '15min': { 
+      pgInterval: '15 minutes', 
+      truncateTo: 'minute',
+      formatType: 'time_with_seconds'
+    },
+    '30min': { 
+      pgInterval: '30 minutes', 
+      truncateTo: 'minute',
+      formatType: 'time_without_seconds'
+    },
+    
+    // Hours-based intervals
+    '1hour': { 
+      pgInterval: '1 hour', 
+      truncateTo: 'hour',
+      formatType: 'time_without_seconds'
+    },
+    '3hour': { 
+      pgInterval: '3 hours', 
+      truncateTo: 'hour',
+      formatType: 'time_without_seconds'
+    },
+    '6hour': { 
+      pgInterval: '6 hours', 
+      truncateTo: 'hour',
+      formatType: 'time_without_seconds'
+    },
+    '12hour': { 
+      pgInterval: '12 hours', 
+      truncateTo: 'hour',
+      formatType: 'date_and_time'
+    },
+    
+    // Days-based intervals
+    '1day': { 
+      pgInterval: '1 day', 
+      truncateTo: 'day',
+      formatType: 'date_and_time'
+    },
+    '7day': { 
+      pgInterval: '1 day', 
+      truncateTo: 'day',
+      formatType: 'date_only'
+    }
   };
 
-  // Use the mapped interval if available, otherwise default to the first part of the interval as seconds
-  if (intervalMap[interval]) {
-    return intervalMap[interval];
+  // Try to get the config for the requested interval
+  if (intervalConfigs[interval]) {
+    return intervalConfigs[interval];
   }
   
   // Try to parse a custom interval format (e.g., '45sec', '2min')
@@ -141,56 +207,104 @@ function convertToPgInterval(interval) {
       'day': 'days'
     };
     
-    return `${value} ${unitMap[unit] || 'minutes'}`;
+    // Determine truncation level and format type based on unit
+    let truncateTo, formatType;
+    switch(unit) {
+      case 'sec':
+        truncateTo = 'second';
+        formatType = 'time_with_seconds';
+        break;
+      case 'min':
+        truncateTo = 'minute';
+        formatType = value < 30 ? 'time_with_seconds' : 'time_without_seconds';
+        break;
+      case 'hour':
+        truncateTo = 'hour';
+        formatType = value < 12 ? 'time_without_seconds' : 'date_and_time';
+        break;
+      case 'day':
+        truncateTo = 'day';
+        formatType = 'date_only';
+        break;
+      default:
+        truncateTo = 'minute';
+        formatType = 'time_without_seconds';
+    }
+    
+    return {
+      pgInterval: `${value} ${unitMap[unit] || 'minutes'}`,
+      truncateTo,
+      formatType
+    };
   }
   
   // Default fallback
-  return '1 minute';
+  return {
+    pgInterval: '1 minute',
+    truncateTo: 'minute',
+    formatType: 'time_without_seconds'
+  };
 }
 
 /**
  * Process traffic results into a more usable format
  * @param {Array} rows Query result rows
- * @param {String} interval Interval used for query
+ * @param {String} interval Original interval string
+ * @param {String} formatType Type of time formatting to use
  * @returns {Object} Processed traffic data
  */
-function processTrafficResults(rows, interval) {
-  // Format the bucket time based on interval
-  const formatTime = (timestamp, interval) => {
+function processTrafficResults(rows, interval, formatType) {
+  // Format the bucket time based on format type
+  const formatTime = (timestamp, formatType) => {
     const date = new Date(timestamp);
     
-    // For short intervals (seconds/minutes), show time with seconds
-    if (['5sec', '15sec', '30sec', '1min', '5min', '10min'].includes(interval)) {
-      return date.toLocaleTimeString();
+    switch(formatType) {
+      case 'time_with_seconds':
+        // For short intervals, show time with seconds (HH:MM:SS)
+        return date.toLocaleTimeString();
+      
+      case 'time_without_seconds':
+        // For medium intervals, show time without seconds (HH:MM)
+        return date.toLocaleString(undefined, {
+          hour: '2-digit',
+          minute: '2-digit'
+        });
+      
+      case 'date_and_time':
+        // For longer intervals, show date and time (MMM DD, HH:MM)
+        return date.toLocaleString(undefined, {
+          month: 'short',
+          day: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit'
+        });
+      
+      case 'date_only':
+        // For very long intervals, show just date (MMM DD)
+        return date.toLocaleDateString(undefined, {
+          month: 'short',
+          day: 'numeric'
+        });
+      
+      default:
+        // Default fallback
+        return date.toLocaleString();
     }
-    
-    // For medium intervals (hours), show date and time without seconds
-    if (['30min', '1hour', '3hour', '6hour'].includes(interval)) {
-      return date.toLocaleString(undefined, {
-        month: 'short',
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit'
-      });
-    }
-    
-    // For long intervals (days), show just date
-    return date.toLocaleDateString(undefined, {
-      month: 'short',
-      day: 'numeric'
-    });
   };
 
   // Process the rows into the expected format
   const trafficData = rows.map(row => ({
     timestamp: row.bucket_time,
-    formatted_time: formatTime(row.bucket_time, interval),
+    formatted_time: formatTime(row.bucket_time, formatType),
     request_count: parseInt(row.request_count, 10),
-    action_counts: row.action_counts || {}
+    action_counts: row.action_counts || {},
+    interval: interval // Include the interval for reference
   }));
 
   // Extract time labels for chart
   const timeLabels = trafficData.map(data => data.formatted_time);
+  
+  _logger('Processed %d data points with interval %s', trafficData.length, interval);
 
   return { 
     trafficData,
