@@ -174,8 +174,8 @@ function extractUniqueProcessIds(timeSeriesData) {
  */
 export function getAnalyticsPanelScript(rawTimeData) {
   return `
-    // Store the raw time series data
-    const rawAnalyticsData = ${JSON.stringify(rawTimeData)};
+    // Store the raw time series data for analytics
+    const rawAnalyticsData = ${rawTimeData}; // Already stringified
     
     // Convert ISO strings to Date objects
     const analyticsData = rawAnalyticsData.map(bucket => ({
@@ -386,6 +386,9 @@ export function getAnalyticsPanelScript(rawTimeData) {
         trafficChart.data.datasets = datasets;
         trafficChart.update();
       } else {
+        // Clean up any existing chart on this canvas to prevent conflicts
+        Chart.getChart('traffic-chart')?.destroy();
+        
         const ctx = document.getElementById('traffic-chart').getContext('2d');
         trafficChart = new Chart(ctx, {
           type: 'line',

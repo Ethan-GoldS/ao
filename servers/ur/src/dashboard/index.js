@@ -46,8 +46,10 @@ export function generateDashboardHtml(metrics) {
   const lastUpdated = new Date().toISOString();
   const refreshControls = generateRefreshControls(lastUpdated);
   
-  // Generate the new advanced analytics panel
-  const analyticsPanel = generateAnalyticsPanel(metrics.timeSeriesData);
+  // Generate the new advanced analytics panel - ensure we have valid data
+  // Add a fallback for empty time series data
+  const timeSeriesData = metrics.timeSeriesData || [];
+  const analyticsPanel = generateAnalyticsPanel(timeSeriesData);
   
   // Generate the traditional dashboard components (we'll keep these for backward compatibility)
   const timeControls = initializeTimeControls(metrics.timeSeriesData);
@@ -364,7 +366,7 @@ export function generateDashboardHtml(metrics) {
       
       <script>
         ${dashboardScripts}
-        ${getAnalyticsPanelScript(JSON.stringify(metrics.timeSeriesData))}
+        ${getAnalyticsPanelScript(JSON.stringify(timeSeriesData || []))}
         
         // Tab switching for analytics vs basic traffic view
         document.querySelectorAll('.tab-button').forEach(button => {

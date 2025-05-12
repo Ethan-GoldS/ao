@@ -140,6 +140,23 @@ export function getTimeChartScript(rawTimeData) {
     
     // Create the initial chart
     function initializeTimeChart() {
+      console.log('Dashboard initialized - setting 6h preset as default');
+      try {
+        // Check if a chart already exists and destroy it to prevent conflicts
+        if (window.timeSeriesChart) {
+          window.timeSeriesChart.destroy();
+          window.timeSeriesChart = null;
+        }
+        
+        // Ensure the canvas exists
+        if (!document.getElementById('timeSeriesChart')) {
+          console.warn('Time series chart canvas not found');
+          return; // Exit early if canvas doesn't exist
+        }
+      } catch (err) {
+        console.error('Error cleaning up previous chart:', err);
+      }
+      
       // Always make sure we're using the current time for end time
       const now = new Date();
       endDatePicker.value = formatDateForInput(now);
@@ -162,16 +179,28 @@ export function getTimeChartScript(rawTimeData) {
       const labels = groupedData.map(point => formatDateLabel(point.timestamp, intervalSelector.value));
       const values = groupedData.map(point => point.requests);
       
-      // Create chart
-      timeSeriesChart = new Chart(timeCtx, {
-        type: 'line',
-        data: {
-          labels: labels,
-          datasets: [{
-            label: 'Requests',
-            data: values,
-            backgroundColor: 'rgba(0, 102, 204, 0.2)',
-            borderColor: 'rgba(0, 102, 204, 1)',
+      // Create the chart with error handling
+      try {
+        // Destroy any existing chart on this canvas to prevent conflicts
+        const existingChart = Chart.getChart(timeCtx.canvas);
+        if (existingChart) {
+          existingChart.destroy();
+        }
+        
+        // Only create chart if we have data to show
+        if (labels.length > 0) {
+          window.timeSeriesChart = new Chart(timeCtx, {
+            type: 'line',
+            data: {
+              labels: labels,
+              datasets: [{
+                label: 'Requests',
+                data: values,
+                backgroundColor: 'rgba(0, 102, 204, 0.2)',
+                borderColor: 'rgba(0, 102, 204, 1)',
+                borderWidth: 2,
+                tension: 0.1
+              }]
             borderWidth: 2,
             tension: 0.1
           }]
