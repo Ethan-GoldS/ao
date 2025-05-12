@@ -393,50 +393,65 @@ export async function getTimeSeriesData(options = {}) {
       _logger('ERROR checking schema details: %O', schemaErr);
     }
   
-    // Check for existence of time_received column
-    const columnCheck = await query(
+    // First check what columns actually exist in the table
+    const columnsCheck = await query(
       `SELECT column_name 
        FROM information_schema.columns 
-       WHERE table_name = 'metrics_requests' 
-       AND column_name = 'time_received'`
+       WHERE table_name = 'metrics_requests'`
     );
     
-    _logger('time_received column exists: %s', columnCheck.rows.length > 0);
+    // Get all available column names
+    const availableColumns = columnsCheck.rows.map(row => row.column_name);
+    _logger('Available columns in metrics_requests table: %O', availableColumns);
     
-    if (columnCheck.rows.length > 0) {
-      // Column exists, use it
+    // Determine which timestamp column to use
+    let timestampColumn = '';
+    
+    // Check in order of preference
+    if (availableColumns.includes('time_received')) {
+      timestampColumn = 'time_received';
+    } else if (availableColumns.includes('timestamp')) {
+      timestampColumn = 'timestamp';
+    } else if (availableColumns.includes('received_time')) {
+      timestampColumn = 'received_time';
+    }
+    
+    _logger('Using timestamp column: %s', timestampColumn || 'NONE');
+    
+    if (timestampColumn) {
       try {
-        _logger('Attempting to query using time_received column with interval %s...', pgInterval);
+        _logger('Attempting query with timestamp column %s and interval %s...', timestampColumn, pgInterval);
         
         // Build process filter if needed
         let processFilter = '';
-        let params = [startTime, endTime];
+        let params = [pgInterval, startTime, endTime];
+        let processIdPosition = 4; // Default position if we need to add processId
         
         if (processId) {
-          processFilter = 'AND "process_id" = $3';
+          processFilter = `AND ${timestampColumn === 'process_id' ? '"process_id"' : 'process_id'} = $${processIdPosition}`;
           params.push(processId);
           _logger('Filtering by process ID: %s', processId);
         }
         
-        // Main query with flexible interval and date range
+        // Build a query that works regardless of column name quoting
         const result = await query(
           `SELECT 
-             date_trunc($1, "time_received") as bucket_time,
+             date_trunc($1, ${timestampColumn}) as bucket_time,
              COUNT(*) as total_requests,
-             jsonb_object_agg("process_id", process_count) as process_counts
+             jsonb_object_agg(process_id, process_count) as process_counts
            FROM (
              SELECT 
-               date_trunc($1, "time_received") as bucket_time,
-               "process_id",
+               date_trunc($1, ${timestampColumn}) as bucket_time,
+               process_id,
                COUNT(*) as process_count
              FROM metrics_requests
-             WHERE "time_received" >= $2 AND "time_received" <= $3 ${processFilter}
-             GROUP BY bucket_time, "process_id"
+             WHERE ${timestampColumn} >= $2 AND ${timestampColumn} <= $3 ${processFilter}
+             GROUP BY bucket_time, process_id
              ORDER BY bucket_time, process_count DESC
            ) AS bucketed_process_counts
            GROUP BY bucket_time
            ORDER BY bucket_time ASC`,
-          [pgInterval, startTime, endTime, ...params.slice(3)], 
+          params, 
           15000 // 15 second timeout
         );
         
