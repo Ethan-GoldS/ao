@@ -6,20 +6,38 @@
 export function generateRefreshControls(lastUpdated) {
   return `
     <div class="refresh-controls">
-      <div class="refresh-interval-group">
-        <label for="dashboardRefreshInterval">Auto-refresh every</label>
-        <input type="number" id="dashboardRefreshInterval" class="form-control" value="15" min="1" max="3600">
-        <span>seconds</span>
-      </div>
-      <div class="refresh-status">
-        <span id="refresh-status">Auto-refreshes enabled</span> - 
-        Last updated: <span id="last-updated">${lastUpdated}</span>
-      </div>
-      <div class="refresh-buttons">
-        <button id="toggle-refresh" class="refresh-btn">Pause</button>
-        <button id="manual-refresh" class="manual-refresh-btn">
-          <i class="bi bi-arrow-repeat"></i>
-        </button>
+      <div class="refresh-card">
+        <div class="refresh-header">
+          <h4>Auto-Refresh Settings</h4>
+        </div>
+        <div class="refresh-body">
+          <div class="refresh-interval-group">
+            <label for="dashboardRefreshInterval">Refresh interval:</label>
+            <div class="refresh-input-group">
+              <input type="number" id="dashboardRefreshInterval" class="form-control" value="15" min="1" max="3600">
+              <span class="input-group-text">seconds</span>
+            </div>
+          </div>
+          
+          <div class="refresh-status">
+            <div class="status-indicator">
+              <span class="status-dot active" id="status-indicator-dot"></span>
+              <span id="refresh-status">Auto-refreshes enabled</span>
+            </div>
+            <div class="last-updated">
+              Last updated: <span id="last-updated">${lastUpdated}</span>
+            </div>
+          </div>
+          
+          <div class="refresh-buttons">
+            <button id="toggle-refresh" class="btn btn-outline-primary refresh-btn">
+              <i class="bi bi-pause-circle"></i> Pause
+            </button>
+            <button id="manual-refresh" class="btn btn-primary manual-refresh-btn">
+              <i class="bi bi-arrow-repeat"></i> Refresh Now
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   `;
@@ -105,6 +123,17 @@ export function getRefreshControlsScript() {
       // Toggle active state
       toggle() {
         window.dashboardRefresh.isActive = !window.dashboardRefresh.isActive;
+        
+        // Update status indicator
+        const statusDot = document.getElementById('status-indicator-dot');
+        if (statusDot) {
+          if (window.dashboardRefresh.isActive) {
+            statusDot.className = 'status-dot active';
+          } else {
+            statusDot.className = 'status-dot paused';
+          }
+        }
+        
         return window.dashboardRefresh.isActive;
       }
     };
@@ -134,12 +163,18 @@ export function getRefreshControlsScript() {
           const isActive = window.dashboardRefresh.toggle();
           
           if (isActive) {
-            refreshButton.textContent = 'Pause';
-            refreshButton.classList.remove('paused');
+            refreshButton.innerHTML = '<i class="bi bi-pause-circle"></i> Pause';
+            refreshButton.classList.remove('btn-outline-secondary');
+            refreshButton.classList.add('btn-outline-primary');
+            const statusDot = document.getElementById('status-indicator-dot');
+            if (statusDot) statusDot.className = 'status-dot active';
             refreshStatus.textContent = 'Auto-refreshes every ' + (window.dashboardRefresh.interval/1000) + ' seconds';
           } else {
-            refreshButton.textContent = 'Resume';
-            refreshButton.classList.add('paused');
+            refreshButton.innerHTML = '<i class="bi bi-play-circle"></i> Resume';
+            refreshButton.classList.remove('btn-outline-primary');
+            refreshButton.classList.add('btn-outline-secondary');
+            const statusDot = document.getElementById('status-indicator-dot');
+            if (statusDot) statusDot.className = 'status-dot paused';
             refreshStatus.textContent = 'Auto-refresh paused';
           }
         });

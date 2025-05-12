@@ -38,11 +38,13 @@ export async function getTrafficData(options) {
     // Convert interval to PostgreSQL interval format
     const pgInterval = convertToPgInterval(interval);
     
+    _logger('Using PostgreSQL interval: %s for requested interval: %s', pgInterval, interval);
+    
     // Prepare new query using proper bucketing first, then counting actions
     let sql = `
       WITH time_buckets AS (
         SELECT 
-          time_bucket($1, time_received) AS bucket_time,
+          date_trunc('second', time_bucket($1::interval, time_received)) AS bucket_time,
           action,
           process_id
         FROM metrics_requests
@@ -117,7 +119,29 @@ function convertToPgInterval(interval) {
     '1day': '1 day'
   };
 
-  return intervalMap[interval] || '1 minute';
+  // Use the mapped interval if available, otherwise default to the first part of the interval as seconds
+  if (intervalMap[interval]) {
+    return intervalMap[interval];
+  }
+  
+  // Try to parse a custom interval format (e.g., '45sec', '2min')
+  const match = interval.match(/^(\d+)(sec|min|hour|day)$/);
+  if (match) {
+    const value = match[1];
+    const unit = match[2];
+    
+    const unitMap = {
+      'sec': 'seconds',
+      'min': 'minutes',
+      'hour': 'hours',
+      'day': 'days'
+    };
+    
+    return `${value} ${unitMap[unit] || 'minutes'}`;
+  }
+  
+  // Default fallback
+  return '1 minute';
 }
 
 /**

@@ -309,27 +309,98 @@ export function getTrafficOverviewStyles() {
       font-style: italic;
     }
     
+    /* New refresh controls styling */
+    .refresh-card {
+      background-color: #f8f9fa;
+      border-radius: 8px;
+      padding: 15px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+      margin-bottom: 20px;
+    }
+    
+    .refresh-header {
+      margin-bottom: 15px;
+      border-bottom: 1px solid #e9ecef;
+      padding-bottom: 10px;
+    }
+    
+    .refresh-header h4 {
+      margin: 0;
+      font-size: 1rem;
+      font-weight: 600;
+      color: #2c3e50;
+    }
+    
+    .refresh-body {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 15px;
+      align-items: center;
+    }
+    
     .refresh-interval-group {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+      min-width: 180px;
+    }
+    
+    .refresh-input-group {
+      display: flex;
+      align-items: center;
+    }
+    
+    .refresh-input-group input {
+      width: 70px;
+      text-align: center;
+      border-radius: 4px 0 0 4px;
+    }
+    
+    .refresh-input-group .input-group-text {
+      background-color: #e9ecef;
+      border: 1px solid #ced4da;
+      border-left: none;
+      border-radius: 0 4px 4px 0;
+      padding: 0.375rem 0.75rem;
+    }
+    
+    .refresh-status {
+      flex: 1;
+      min-width: 200px;
+    }
+    
+    .status-indicator {
       display: flex;
       align-items: center;
       gap: 8px;
-      margin-bottom: 10px;
+      margin-bottom: 5px;
     }
     
-    .refresh-interval-group input {
-      width: 70px;
-      text-align: center;
+    .status-dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
     }
     
-    .refresh-interval-group label,
-    .refresh-interval-group span {
-      font-size: 0.9rem;
-      white-space: nowrap;
+    .status-dot.active {
+      background-color: #28a745;
+      box-shadow: 0 0 5px rgba(40, 167, 69, 0.5);
+    }
+    
+    .status-dot.paused {
+      background-color: #6c757d;
+    }
+    
+    .last-updated {
+      font-size: 0.8rem;
+      color: #6c757d;
     }
     
     .refresh-buttons {
       display: flex;
       gap: 8px;
+      margin-left: auto;
     }
     
     @media (max-width: 768px) {
@@ -423,7 +494,8 @@ export function getTrafficOverviewScript() {
       // Set up event listeners
       setupEventListeners(trafficChart);
       
-      // Initial data load
+      // Initial data load - default to 1 minute interval
+      document.getElementById('intervalSelector').value = '1min';
       loadTrafficData(trafficChart);
       
       // Load process ID suggestions
@@ -481,7 +553,34 @@ export function getTrafficOverviewScript() {
           
           // Update date pickers to match selected range
           updateDatePickersFromRange(this.value);
+          
+          // For short time ranges, use smaller intervals
+          const intervalSelector = document.getElementById('intervalSelector');
+          if (intervalSelector) {
+            // Adjust interval based on time range
+            if (['1min', '5min'].includes(this.value)) {
+              // For short ranges, use seconds
+              intervalSelector.value = '5sec';
+            } else if (['15min', '30min'].includes(this.value)) {
+              intervalSelector.value = '30sec';
+            } else if (['1hour'].includes(this.value)) {
+              intervalSelector.value = '1min';
+            } else if (['3hour', '6hour'].includes(this.value)) {
+              intervalSelector.value = '5min';
+            } else if (['12hour', '1day'].includes(this.value)) {
+              intervalSelector.value = '30min';
+            } else if (['7day'].includes(this.value)) {
+              intervalSelector.value = '3hour';
+            }
+          }
         }
+      });
+      
+      // Interval selector change
+      document.getElementById('intervalSelector').addEventListener('change', function() {
+        console.log('Interval changed to:', this.value);
+        // When interval changes, reload data with new interval
+        loadTrafficData(chart);
       });
       
       // Apply filters button
@@ -576,6 +675,8 @@ export function getTrafficOverviewScript() {
     
     // Load traffic data from the server
     function loadTrafficData(chart, graceful = false) {
+      console.log('Loading traffic data...'); // Debug log
+      
       // Only show loading indicators if not graceful refresh
       if (!graceful) {
         document.getElementById('chartLoadingOverlay').style.display = 'flex';
@@ -602,11 +703,17 @@ export function getTrafficOverviewScript() {
       const startParam = startTime.toISOString();
       const endParam = endTime.toISOString();
       
+      // Get the selected interval
+      const selectedInterval = document.getElementById('intervalSelector').value;
+      console.log('Using interval for API request:', selectedInterval);
+      
       // Construct API URL
-      let url = \`/api/traffic-data?startTime=\${encodeURIComponent(startParam)}&endTime=\${encodeURIComponent(endParam)}&interval=\${interval}\`;
+      let url = '/api/traffic-data?startTime=' + encodeURIComponent(startParam) + 
+                '&endTime=' + encodeURIComponent(endParam) + 
+                '&interval=' + selectedInterval;
       
       if (processIdFilter) {
-        url += \`&processIdFilter=\${encodeURIComponent(processIdFilter)}\`;
+        url += '&processIdFilter=' + encodeURIComponent(processIdFilter);
       }
       
       // Fetch data from API
@@ -615,6 +722,7 @@ export function getTrafficOverviewScript() {
           if (!response.ok) {
             throw new Error('Network response was not ok');
           }
+          console.log('Response received from server');
           return response.json();
         })
         .then(data => {
@@ -677,6 +785,7 @@ export function getTrafficOverviewScript() {
     
     // Update traffic chart and table with new data
     function updateTrafficVisualization(chart, data, graceful = false) {
+      console.log('Updating visualization with data:', data); // Debug log
       // Check if chart is valid
       if (!chart || !chart.data) {
         console.error('Invalid chart object');
