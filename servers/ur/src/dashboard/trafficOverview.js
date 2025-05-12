@@ -247,6 +247,29 @@ export function getTrafficOverviewStyles() {
       background-color: #e9ecef;
     }
     
+    .refresh-interval-group {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+    
+    .refresh-interval-group input {
+      width: 70px;
+      text-align: center;
+    }
+    
+    .refresh-interval-group label,
+    .refresh-interval-group span {
+      font-size: 0.9rem;
+      white-space: nowrap;
+    }
+    
+    .refresh-buttons {
+      display: flex;
+      gap: 8px;
+    }
+    
     @media (max-width: 768px) {
       .traffic-controls {
         flex-direction: column;
@@ -347,17 +370,16 @@ export function getTrafficOverviewScript() {
       // Store chart in window for potential external access
       window.trafficChart = trafficChart;
       
-      // Setup auto-refresh timer (every 30 seconds)
-      let autoRefreshTimer = setInterval(() => {
-        const autoRefreshEl = document.getElementById('autoRefresh');
-        if (autoRefreshEl && autoRefreshEl.checked) {
-          loadTrafficData(trafficChart);
-        }
-      }, 30000);
+      // Register with global refresh system if available
+      if (window.dashboardRefresh) {
+        window.dashboardRefresh.register((graceful) => {
+          loadTrafficData(trafficChart, graceful);
+        });
+      }
       
-      // Clean up on page unload
-      window.addEventListener('beforeunload', () => {
-        clearInterval(autoRefreshTimer);
+      // Set up event listener for manual refresh button
+      document.getElementById('refreshTrafficData').addEventListener('click', function() {
+        loadTrafficData(trafficChart, false); // Manual refresh is not graceful
       });
     }
     
@@ -491,10 +513,12 @@ export function getTrafficOverviewScript() {
     }
     
     // Load traffic data from the server
-    function loadTrafficData(chart) {
-      // Show loading indicators
-      document.getElementById('chartLoadingOverlay').style.display = 'flex';
-      document.getElementById('tableLoadingOverlay').style.display = 'flex';
+    function loadTrafficData(chart, graceful = false) {
+      // Only show loading indicators if not graceful refresh
+      if (!graceful) {
+        document.getElementById('chartLoadingOverlay').style.display = 'flex';
+        document.getElementById('tableLoadingOverlay').style.display = 'flex';
+      }
       
       // Get filter values
       const timeRange = document.getElementById('timeRangeSelector').value;
@@ -532,11 +556,13 @@ export function getTrafficOverviewScript() {
           return response.json();
         })
         .then(data => {
-          updateTrafficVisualization(chart, data);
+          updateTrafficVisualization(chart, data, graceful);
         })
         .catch(error => {
           console.error('Error fetching traffic data:', error);
-          showErrorMessage('Failed to load traffic data. Please try again.');
+          if (!graceful) {
+            showErrorMessage('Failed to load traffic data. Please try again.');
+          }
         })
         .finally(() => {
           // Hide loading indicators
@@ -588,9 +614,11 @@ export function getTrafficOverviewScript() {
     }
     
     // Update traffic chart and table with new data
-    function updateTrafficVisualization(chart, data) {
+    function updateTrafficVisualization(chart, data, graceful = false) {
       if (!data || !data.trafficData || !Array.isArray(data.trafficData) || data.error) {
-        showErrorMessage(data.error || 'Invalid data received from server');
+        if (!graceful) {
+          showErrorMessage(data.error || 'Invalid data received from server');
+        }
         return;
       }
       
@@ -598,13 +626,54 @@ export function getTrafficOverviewScript() {
       const timeLabels = data.timeLabels || [];
       const requestCounts = data.trafficData.map(item => item.request_count);
       
-      // Update chart
-      chart.data.labels = timeLabels;
-      chart.data.datasets[0].data = requestCounts;
-      chart.update();
-      
-      // Update table
-      updateTrafficTable(data.trafficData);
+      if (graceful) {
+        // Graceful transition - use animation
+        const animation = {
+          duration: 600,
+          easing: 'easeOutQuad'
+        };
+        
+        // Update chart with animation
+        chart.data.labels = timeLabels;
+        chart.data.datasets[0].data = requestCounts;
+        chart.update(animation);
+        
+        // Update table with a fade transition
+        const tableBody = document.getElementById('trafficTableBody');
+        if (tableBody) {
+          // Create a temporary container for the new table content
+          const tempContainer = document.createElement('div');
+          tempContainer.style.position = 'absolute';
+          tempContainer.style.left = '-9999px';
+          document.body.appendChild(tempContainer);
+          
+          // Generate the new table HTML
+          tempContainer.innerHTML = '<table><tbody></tbody></table>';
+          const tempTableBody = tempContainer.querySelector('tbody');
+          
+          // Populate with new data
+          populateTableBody(tempTableBody, data.trafficData);
+          
+          // Fade out current content
+          tableBody.style.transition = 'opacity 300ms';
+          tableBody.style.opacity = '0.3';
+          
+          // After fade out, replace content and fade in
+          setTimeout(() => {
+            tableBody.innerHTML = tempTableBody.innerHTML;
+            tableBody.style.opacity = '1';
+            document.body.removeChild(tempContainer);
+          }, 300);
+        }
+      } else {
+        // Regular update without transition
+        chart.data.labels = timeLabels;
+        chart.data.datasets[0].data = requestCounts;
+        chart.update();
+        
+        // Update table
+        updateTrafficTable(data.trafficData);
+      }
     }
     
     // Update traffic table with new data
@@ -614,6 +683,17 @@ export function getTrafficOverviewScript() {
       // Clear existing rows
       tableBody.innerHTML = '';
       
+      if (!trafficData || trafficData.length === 0) {
+        tableBody.innerHTML = '<tr><td colspan="3" class="text-center">No data available</td></tr>';
+        return;
+      }
+      
+      // Populate the table body
+      populateTableBody(tableBody, trafficData);
+    }
+    
+    // Helper function to populate a table body with traffic data
+    function populateTableBody(tableBody, trafficData) {
       if (!trafficData || trafficData.length === 0) {
         tableBody.innerHTML = '<tr><td colspan="3" class="text-center">No data available</td></tr>';
         return;
