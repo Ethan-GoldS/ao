@@ -683,6 +683,12 @@ export function getTrafficOverviewScript() {
         document.getElementById('tableLoadingOverlay').style.display = 'flex';
       }
       
+      // Clear any previous error messages
+      const errorDisplay = document.getElementById('error-message');
+      if (errorDisplay) {
+        errorDisplay.style.display = 'none';
+      }
+      
       // Get filter values
       const timeRange = document.getElementById('timeRangeSelector').value;
       const interval = document.getElementById('intervalSelector').value;
@@ -768,13 +774,14 @@ export function getTrafficOverviewScript() {
           startTime.setHours(endTime.getHours() - 6);
           break;
         case '12hour':
-          startTime.setHours(endTime.getHours() - 12);
+          // Fix the 12-hour limit by ensuring we go back full 12 hours
+          startTime.setTime(endTime.getTime() - (12 * 60 * 60 * 1000));
           break;
         case '1day':
-          startTime.setDate(endTime.getDate() - 1);
+          startTime.setTime(endTime.getTime() - (24 * 60 * 60 * 1000));
           break;
         case '7day':
-          startTime.setDate(endTime.getDate() - 7);
+          startTime.setTime(endTime.getTime() - (7 * 24 * 60 * 60 * 1000));
           break;
         default:
           startTime.setHours(endTime.getHours() - 1); // Default to 1 hour

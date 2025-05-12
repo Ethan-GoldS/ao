@@ -40,11 +40,15 @@ export async function getTrafficData(options) {
     
     _logger('Using PostgreSQL interval: %s for requested interval: %s', pgInterval, interval);
     
+    // Calculate time difference in minutes for logging
+    const timeDiffMins = Math.round((endTime - startTime) / (1000 * 60));
+    _logger('Time range requested: %d minutes (%d hours)', timeDiffMins, timeDiffMins/60);
+    
     // Prepare new query using proper bucketing first, then counting actions
     let sql = `
       WITH time_buckets AS (
         SELECT 
-          date_trunc('second', time_bucket($1::interval, time_received)) AS bucket_time,
+          time_bucket($1::interval, time_received) AS bucket_time,
           action,
           process_id
         FROM metrics_requests
