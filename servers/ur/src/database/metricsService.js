@@ -648,6 +648,7 @@ export async function getFlexibleTimeSeriesData(options = {}) {
       queryParams.push(`%${processIdFilter}%`);
     }
     
+    // First get the basic time slot data with request counts and average duration
     const result = await query(
       `WITH time_slots AS (
         SELECT 
@@ -660,14 +661,6 @@ export async function getFlexibleTimeSeriesData(options = {}) {
       SELECT 
         time_slots.slot_start,
         COUNT(mr.id) AS request_count,
-        COALESCE(jsonb_object_agg(
-          mr.process_id, 
-          COUNT(mr.id)
-        ) FILTER (WHERE mr.id IS NOT NULL), '{}'::jsonb) AS process_counts,
-        COALESCE(jsonb_object_agg(
-          mr.action, 
-          COUNT(mr.id)
-        ) FILTER (WHERE mr.id IS NOT NULL), '{}'::jsonb) AS action_counts,
         COALESCE(AVG(mr.duration) FILTER (WHERE mr.id IS NOT NULL), 0) AS avg_duration
       FROM 
         time_slots
@@ -683,8 +676,75 @@ export async function getFlexibleTimeSeriesData(options = {}) {
       30000 // 30 second timeout
     );
     
-    // Format the results
-    const timeSeriesData = result.rows.map(row => ({
+    // Now get process counts for each time slot
+    const processCountResults = [];
+    
+    for (const row of result.rows) {
+      const processCountsQuery = await query(
+        `SELECT
+          process_id,
+          COUNT(*) as count
+        FROM
+          metrics_requests
+        WHERE
+          time_received >= $1 AND
+          time_received < $1 + interval '${intervalExpr}'
+          ${processIdFilter ? 'AND process_id ILIKE $2' : ''}
+        GROUP BY
+          process_id
+        ORDER BY
+          count DESC`,
+        processIdFilter
+          ? [row.slot_start, `%${processIdFilter}%`]
+          : [row.slot_start],
+        10000
+      );
+      
+      // Convert to an object mapping process_id to count
+      const processCounts = {};
+      processCountsQuery.rows.forEach(proc => {
+        processCounts[proc.process_id] = parseInt(proc.count, 10);
+      });
+      
+      // Get action counts for this time slot
+      const actionCountsQuery = await query(
+        `SELECT
+          action,
+          COUNT(*) as count
+        FROM
+          metrics_requests
+        WHERE
+          time_received >= $1 AND
+          time_received < $1 + interval '${intervalExpr}'
+          ${processIdFilter ? 'AND process_id ILIKE $2' : ''}
+        GROUP BY
+          action
+        ORDER BY
+          count DESC`,
+        processIdFilter
+          ? [row.slot_start, `%${processIdFilter}%`]
+          : [row.slot_start],
+        10000
+      );
+      
+      // Convert to an object mapping action to count
+      const actionCounts = {};
+      actionCountsQuery.rows.forEach(act => {
+        actionCounts[act.action] = parseInt(act.count, 10);
+      });
+      
+      // Add to results
+      processCountResults.push({
+        slot_start: row.slot_start,
+        request_count: row.request_count,
+        avg_duration: row.avg_duration,
+        process_counts: processCounts,
+        action_counts: actionCounts
+      });
+    }
+    
+    // Format the results from our detailed processCountResults
+    const timeSeriesData = processCountResults.map(row => ({
       timestamp: row.slot_start.toISOString(),
       requestCount: parseInt(row.request_count, 10),
       processCounts: row.process_counts || {},
