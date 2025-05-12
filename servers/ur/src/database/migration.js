@@ -173,6 +173,51 @@ export async function runMigrations() {
         `)
       }
       
+      // Create metrics_view to ensure consistent column access
+      try {
+        // First check if the view exists
+        const viewExists = await query(`
+          SELECT table_name 
+          FROM information_schema.tables 
+          WHERE table_name = 'metrics_view' AND table_type = 'VIEW'
+        `)
+        
+        // Drop the view if it exists to refresh its definition
+        if (viewExists.rows.length > 0) {
+          _logger('Dropping existing metrics_view to update it')
+          await query('DROP VIEW metrics_view')
+        }
+        
+        // Create the view
+        _logger('Creating metrics_view for consistent column access')
+        await query(`
+          CREATE VIEW metrics_view AS
+          SELECT 
+            id,
+            process_id,
+            request_ip,
+            request_referrer,
+            request_method,
+            request_path,
+            request_user_agent,
+            request_origin,
+            request_content_type,
+            request_body,
+            request_raw,
+            response_body,
+            action,
+            duration,
+            time_received,
+            time_completed
+          FROM metrics_requests
+        `)
+        
+        _logger('Metrics view created successfully')
+      } catch (viewErr) {
+        _logger('Warning: Error creating metrics_view: %O', viewErr)
+        // Continue execution, not a critical error
+      }
+      
       _logger('Traffic overview support added successfully')
     } catch (trafficErr) {
       _logger('Warning: Error setting up traffic overview support: %O', trafficErr)
