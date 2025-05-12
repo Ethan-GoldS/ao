@@ -377,7 +377,41 @@ export async function getTimeSeriesData(hours = 24) {
         return await processTimeSeriesResults(result, hours);
       } catch (err) {
         _logger('Error using timestamp column: %s', err.message);
-        // Continue to fallback methods
+        
+        // Third fallback: generate synthetic data if no time columns exist
+        _logger('Using simplified metrics query without time data');
+        try {
+          // Get overall request count grouped by process ID
+          const result = await query(`
+            SELECT 
+              COUNT(*) as total_requests,
+              jsonb_object_agg(process_id, process_count) as process_counts
+            FROM (
+              SELECT 
+                process_id,
+                COUNT(*) as process_count
+              FROM metrics_requests
+              GROUP BY process_id
+              ORDER BY process_count DESC
+            ) AS process_counts
+          `);
+          
+          // Create a single time point with the aggregate data
+          if (result && result.rows && result.rows.length > 0) {
+            const now = new Date();
+            // Create a simple array with just one data point (for now)
+            return [{
+              timestamp: now.toISOString(),
+              totalRequests: parseInt(result.rows[0].total_requests, 10) || 0,
+              processCounts: result.rows[0].process_counts || {}
+            }];
+          }
+          
+          return [];
+        } catch (finalError) {
+          _logger('Final fallback attempt failed: %s', finalError.message);
+          return [];
+        }
       }
     }
     

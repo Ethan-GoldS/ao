@@ -81,6 +81,9 @@ export function getTrafficInsightsScript(rawTimeData) {
     // Store and preprocess the raw time data
     const rawTimeData = ${JSON.stringify(rawTimeData || [])};
     
+    // Check if we have valid time data
+    const hasTimeData = Array.isArray(rawTimeData) && rawTimeData.length > 0;
+    
     // Prepare the traffic insights chart
     let trafficChart = null;
     
@@ -263,16 +266,39 @@ export function getTrafficInsightsScript(rawTimeData) {
     
     // Initialize the chart when the page loads
     document.addEventListener('DOMContentLoaded', function() {
-      // Render the initial chart
-      renderTrafficInsightsChart();
-      
-      // Set up event listeners
-      document.getElementById('timeRange').addEventListener('change', renderTrafficInsightsChart);
-      document.getElementById('groupBy').addEventListener('change', renderTrafficInsightsChart);
-      document.getElementById('refreshTrafficData').addEventListener('click', function() {
-        // Reload the page to get fresh data
-        window.location.reload();
-      });
+      // Only set up the chart if we have time data
+      if (hasTimeData) {
+        // Render the initial chart
+        renderTrafficInsightsChart();
+        
+        // Set up event listeners
+        document.getElementById('timeRange').addEventListener('change', renderTrafficInsightsChart);
+        document.getElementById('groupBy').addEventListener('change', renderTrafficInsightsChart);
+        document.getElementById('refreshTrafficData').addEventListener('click', function() {
+          // Reload the page to get fresh data
+          window.location.reload();
+        });
+      } else {
+        // Display a message when no time data is available
+        const container = document.querySelector('.chart-container');
+        if (container) {
+          container.innerHTML = '<div class="no-data-message">'+
+            '<p>No time series data is available. This may be because:</p>'+
+            '<ul>'+
+              '<li>The required database columns haven\'t been created yet</li>'+
+              '<li>There aren\'t enough requests in the system</li>'+
+            '</ul>'+
+            '<p>The system will automatically create the necessary columns when they\'re needed.</p>'+
+            '<p>Try refreshing after making some requests to the system.</p>'+
+          '</div>';
+        }
+        
+        // Also update the insight boxes
+        document.querySelector('#peakTraffic .insight-value').textContent = '0';
+        document.querySelector('#totalRequests .insight-value').textContent = '0';
+        document.querySelector('#avgRequestsPerHour .insight-value').textContent = '0';
+        document.querySelector('#uniqueProcesses .insight-value').textContent = '0';
+      }
     });
   `;
 }
@@ -372,6 +398,29 @@ export function getTrafficInsightsStyles() {
       font-size: 22px;
       font-weight: bold;
       color: #333;
+    }
+    
+    .no-data-message {
+      text-align: center;
+      padding: 30px;
+      background-color: #f8f9fa;
+      border-radius: 8px;
+      margin: 20px 0;
+    }
+    
+    .no-data-message p {
+      margin-bottom: 15px;
+      color: #555;
+    }
+    
+    .no-data-message ul {
+      text-align: left;
+      display: inline-block;
+      margin: 10px auto;
+    }
+    
+    .no-data-message li {
+      margin-bottom: 5px;
     }
   `;
 }
