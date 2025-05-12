@@ -275,67 +275,56 @@ export async function getClientMetrics() {
  */
 export async function getTimeSeriesData(hours = 24) {
   try {
-    // Check for existence of time_received column
-    const columnCheck = await query(
+    // First, let's inspect what columns actually exist in the metrics_requests table
+    const availableColumns = await query(
       `SELECT column_name 
        FROM information_schema.columns 
-       WHERE table_name = 'metrics_requests' 
-       AND column_name = 'time_received'`
+       WHERE table_name = 'metrics_requests'`
     );
     
-    if (columnCheck.rows.length > 0) {
-      // Column exists, use it
-      try {
-        const result = await query(
-          `SELECT 
-             date_trunc('hour', time_received) as hour,
-             COUNT(*) as total_requests,
-             jsonb_object_agg(process_id, process_count) as process_counts
-           FROM (
-             SELECT 
-               date_trunc('hour', time_received) as hour,
-               process_id,
-               COUNT(*) as process_count
-             FROM metrics_requests
-             WHERE time_received > NOW() - interval '${hours} hours'
-             GROUP BY hour, process_id
-             ORDER BY hour, process_count DESC
-           ) AS hourly_process_counts
-           GROUP BY hour
-           ORDER BY hour ASC`,
-          [], // params
-          10000 // 10 second timeout
-        );
-        return await processTimeSeriesResults(result, hours);
-      } catch (err) {
-        _logger('Error using time_received column: %s', err.message);
-        // Continue to fallback methods
-      }
+    // Log all available columns to diagnose the issue
+    const columnNames = availableColumns.rows.map(row => row.column_name);
+    _logger('Available columns in metrics_requests: %s', columnNames.join(', '));
+    
+    // Check which timestamp column we should use based on what's available
+    const hasTimeReceived = columnNames.includes('time_received');
+    const hasTimeCompleted = columnNames.includes('time_completed');
+    const hasCreatedAt = columnNames.includes('created_at');
+    const hasTimestamp = columnNames.includes('timestamp');
+    const hasID = columnNames.includes('id');
+    
+    let timeColumn = null;
+    
+    // Determine which column to use for time series, in order of preference
+    if (hasTimeReceived) {
+      timeColumn = 'time_received';
+      _logger('Using time_received column for time series data');
+    } else if (hasTimeCompleted) {
+      timeColumn = 'time_completed';
+      _logger('Using time_completed column for time series data');
+    } else if (hasCreatedAt) {
+      timeColumn = 'created_at';
+      _logger('Using created_at column for time series data');
+    } else if (hasTimestamp) {
+      timeColumn = 'timestamp';
+      _logger('Using timestamp column for time series data');
     }
     
-    // Check for existence of timestamp column
-    const timestampCheck = await query(
-      `SELECT column_name 
-       FROM information_schema.columns 
-       WHERE table_name = 'metrics_requests' 
-       AND column_name = 'timestamp'`
-    );
-    
-    if (timestampCheck.rows.length > 0) {
-      // Column exists, use it
+    if (timeColumn) {
       try {
+        // Use the detected time column
         const result = await query(
           `SELECT 
-             date_trunc('hour', timestamp) as hour,
+             date_trunc('hour', ${timeColumn}) as hour,
              COUNT(*) as total_requests,
              jsonb_object_agg(process_id, process_count) as process_counts
            FROM (
              SELECT 
-               date_trunc('hour', timestamp) as hour,
+               date_trunc('hour', ${timeColumn}) as hour,
                process_id,
                COUNT(*) as process_count
              FROM metrics_requests
-             WHERE timestamp > NOW() - interval '${hours} hours'
+             WHERE ${timeColumn} > NOW() - interval '${hours} hours'
              GROUP BY hour, process_id
              ORDER BY hour, process_count DESC
            ) AS hourly_process_counts
@@ -346,8 +335,8 @@ export async function getTimeSeriesData(hours = 24) {
         );
         return await processTimeSeriesResults(result, hours);
       } catch (err) {
-        _logger('Error using timestamp column: %s', err.message);
-        // Continue to fallback methods
+        _logger('Error using %s column: %s', timeColumn, err.message);
+        // Continue to fallback method
       }
     }
     
@@ -365,10 +354,22 @@ export async function getTimeSeriesData(hours = 24) {
            FROM metrics_requests
            GROUP BY process_id
            ORDER BY process_count DESC
+           LIMIT 100
          ) AS process_counts`,
         [], // params
-        10000 // 10 second timeout
+        5000 // 5 second timeout
       );
+      
+      // Also add a migration query to ensure we have a time column for future requests
+      try {
+        _logger('Attempting to add time_received column if it does not exist');
+        await query(
+          `ALTER TABLE metrics_requests ADD COLUMN IF NOT EXISTS time_received TIMESTAMPTZ NOT NULL DEFAULT NOW()`
+        );
+        _logger('Successfully ensured time_received column exists');
+      } catch (err) {
+        _logger('Error ensuring time_received column: %s', err.message);
+      }
       
       // Generate time series data using just the totals
       const timeSeriesData = [];
