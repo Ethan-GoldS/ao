@@ -211,6 +211,37 @@ export function finishTracking(tracking, action) {
   
   const timeCompleted = new Date().toISOString();
   
+  // Final tracking ID to prevent creating duplicate records
+  const trackingId = `${processId}-${path || ''}-${action || 'unknown'}-${startTime}`;
+  
+  // Track this record in memory to prevent duplicate submissions
+  // This is in addition to the database-level check
+  if (global._metricsTrackingCache === undefined) {
+    global._metricsTrackingCache = new Map();
+    
+    // Set up cleanup
+    setInterval(() => {
+      if (global._metricsTrackingCache) {
+        const now = Date.now();
+        global._metricsTrackingCache.forEach((timestamp, key) => {
+          // Clean up entries older than 1 minute
+          if (now - timestamp > 60000) {
+            global._metricsTrackingCache.delete(key);
+          }
+        });
+      }
+    }, 300000); // Clean every 5 minutes
+  }
+  
+  // Check if we've already recorded this specific tracking event
+  if (global._metricsTrackingCache.has(trackingId)) {
+    _logger('Preventing duplicate record for tracking ID %s (already recorded)', trackingId);
+    return;
+  }
+  
+  // Mark as recorded
+  global._metricsTrackingCache.set(trackingId, Date.now());
+  
   // Create a complete metrics record
   const metricsRecord = {
     ...tracking,

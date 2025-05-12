@@ -12,12 +12,42 @@ const _logger = logger.child('metricsService')
  * @param {Object} details Request details object
  * @returns {Promise<boolean>} Success status
  */
+// Cache to prevent storing duplicate metrics within a short time window
+const recentlyStoredMetrics = new Map();
+
+// Clean up the cache periodically to prevent memory leaks
+setInterval(() => {
+  const now = Date.now();
+  recentlyStoredMetrics.forEach((timestamp, key) => {
+    // Remove entries older than 30 seconds (same as middleware)
+    if (now - timestamp > 30000) {
+      recentlyStoredMetrics.delete(key);
+    }
+  });
+}, 60000); // Run cleanup every minute
+
 export async function storeMetrics(details) {
   try {
     if (!details || !details.processId) {
       _logger('Invalid request details for metrics storage')
       return false
     }
+    
+    // Create a unique key for this metrics record
+    const metricsKey = `${details.processId}-${details.method || 'unknown'}-${details.path || 'unknown'}-${details.timeReceived || Date.now()}`;
+    
+    // Check if we've recently stored metrics for this key
+    const lastStored = recentlyStoredMetrics.get(metricsKey);
+    if (lastStored) {
+      const timeSince = Date.now() - lastStored;
+      if (timeSince < 1000) { // Within 1 second (same as middleware)
+        _logger('Preventing duplicate metrics storage for %s (already stored %dms ago)', details.processId, timeSince);
+        return true; // Return true to indicate "success" but we actually skipped
+      }
+    }
+    
+    // Mark as stored
+    recentlyStoredMetrics.set(metricsKey, Date.now());
 
     const {
       processId,
