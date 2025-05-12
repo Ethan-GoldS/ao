@@ -27,11 +27,11 @@ export function generateRefreshControls(lastUpdated) {
 
 /**
  * Get the refresh controls script
- * Note: This returns JavaScript as a string template literal
+ * Note: This returns JavaScript as a string
  * @returns {string} JavaScript code as a string
  */
 export function getRefreshControlsScript() {
-  // Using a multiline template literal for the JavaScript code
+  // Using a multiline string for the JavaScript code
   // This is valid code, ignore the lint errors in the string content
   /* eslint-disable */
   return `
@@ -48,32 +48,32 @@ export function getRefreshControlsScript() {
         this.stop();
         
         // Create new timer
-        this.timer = setInterval(() => {
-          if (this.isActive) {
-            this.refresh(true); // true = graceful refresh
+        this.timer = setInterval(function() {
+          if (window.dashboardRefresh.isActive) {
+            window.dashboardRefresh.refresh(true); // true = graceful refresh
           }
-        }, this.interval);
+        }, window.dashboardRefresh.interval);
         
-        console.log(`Dashboard auto-refresh set to ${this.interval/1000} seconds`);
+        console.log('Auto-refresh set to ' + (window.dashboardRefresh.interval/1000) + ' seconds');
       },
       
       // Stop the refresh timer
       stop() {
-        if (this.timer) {
-          clearInterval(this.timer);
-          this.timer = null;
+        if (window.dashboardRefresh.timer) {
+          clearInterval(window.dashboardRefresh.timer);
+          window.dashboardRefresh.timer = null;
         }
       },
       
       // Register a callback function to be called on refresh
       register(callback) {
-        if (typeof callback === 'function' && !this.callbacks.includes(callback)) {
-          this.callbacks.push(callback);
+        if (typeof callback === 'function' && !window.dashboardRefresh.callbacks.includes(callback)) {
+          window.dashboardRefresh.callbacks.push(callback);
         }
       },
       
       // Trigger a refresh (call all registered callbacks)
-      refresh(graceful = false) {
+      refresh(graceful) {
         // Update the last updated timestamp
         const lastUpdatedSpan = document.getElementById('last-updated');
         if (lastUpdatedSpan) {
@@ -81,7 +81,7 @@ export function getRefreshControlsScript() {
         }
         
         // Call all registered callbacks
-        this.callbacks.forEach(callback => {
+        window.dashboardRefresh.callbacks.forEach(function(callback) {
           try {
             callback(graceful);
           } catch (err) {
@@ -92,20 +92,20 @@ export function getRefreshControlsScript() {
       
       // Update the refresh interval
       setInterval(seconds) {
-        this.interval = Math.max(1, Math.min(3600, seconds)) * 1000;
-        this.start(); // Restart timer with new interval
+        window.dashboardRefresh.interval = Math.max(1, Math.min(3600, seconds)) * 1000;
+        window.dashboardRefresh.start(); // Restart timer with new interval
         
         // Update display
         const status = document.getElementById('refresh-status');
-        if (status && this.isActive) {
-          status.textContent = `Auto-refreshes every ${seconds} seconds`;
+        if (status && window.dashboardRefresh.isActive) {
+          status.textContent = 'Auto-refreshes every ' + (window.dashboardRefresh.interval/1000) + ' seconds';
         }
       },
       
       // Toggle active state
       toggle() {
-        this.isActive = !this.isActive;
-        return this.isActive;
+        window.dashboardRefresh.isActive = !window.dashboardRefresh.isActive;
+        return window.dashboardRefresh.isActive;
       }
     };
     
@@ -136,7 +136,7 @@ export function getRefreshControlsScript() {
           if (isActive) {
             refreshButton.textContent = 'Pause';
             refreshButton.classList.remove('paused');
-            refreshStatus.textContent = `Auto-refreshes every ${window.dashboardRefresh.interval/1000} seconds`;
+            refreshStatus.textContent = 'Auto-refreshes every ' + (window.dashboardRefresh.interval/1000) + ' seconds';
           } else {
             refreshButton.textContent = 'Resume';
             refreshButton.classList.add('paused');
@@ -166,5 +166,4 @@ export function getRefreshControlsScript() {
       console.log('Legacy startAutoRefresh called - using new mechanism');
     }
   `;
-}
 }

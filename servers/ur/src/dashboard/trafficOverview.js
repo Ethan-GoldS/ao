@@ -372,7 +372,7 @@ export function getTrafficOverviewScript() {
       
       // Register with global refresh system if available
       if (window.dashboardRefresh) {
-        window.dashboardRefresh.register((graceful) => {
+        window.dashboardRefresh.register(function(graceful) {
           loadTrafficData(trafficChart, graceful);
         });
       }
@@ -659,7 +659,7 @@ export function getTrafficOverviewScript() {
           tableBody.style.opacity = '0.3';
           
           // After fade out, replace content and fade in
-          setTimeout(() => {
+          setTimeout(function() {
             tableBody.innerHTML = tempTableBody.innerHTML;
             tableBody.style.opacity = '1';
             document.body.removeChild(tempContainer);
@@ -722,7 +722,7 @@ export function getTrafficOverviewScript() {
           if (action && action !== 'null' && action !== 'undefined') {
             const actionTag = document.createElement('span');
             actionTag.classList.add('action-tag');
-            actionTag.textContent = \`\${action}: \${count}\`;
+            actionTag.textContent = action + ': ' + count;
             actionsCell.appendChild(actionTag);
           }
         });
