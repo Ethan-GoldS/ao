@@ -3,7 +3,7 @@
  * Imports and assembles all dashboard components
  */
 import { getDashboardStyles } from './styles.js';
-import { generateTrafficOverviewHtml, getTrafficOverviewScript, getTrafficOverviewStyles } from './trafficOverview.js';
+import { initializeTimeControls, getTimeChartScript } from './timeChart.js';
 import { 
   generateRecentRequestsTable, 
   generateProcessMetricsTable, 
@@ -12,6 +12,7 @@ import {
   getFilterScript 
 } from './metricsTables.js';
 import { generateRefreshControls, getRefreshControlsScript } from './refreshControls.js';
+import { generateTrafficOverview, generateNoDataMessage } from './trafficOverview.js';
 import { logger } from '../logger.js';
 
 const _logger = logger.child('dashboard');
@@ -44,7 +45,7 @@ export function generateDashboardHtml(metrics) {
   // Generate each section of the dashboard
   const lastUpdated = new Date().toISOString();
   const refreshControls = generateRefreshControls(lastUpdated);
-  const trafficOverviewHtml = generateTrafficOverviewHtml();
+  const timeControls = initializeTimeControls(metrics.timeSeriesData);
   const recentRequestsTable = generateRecentRequestsTable(metrics.recentRequests, metrics.requestDetails);
   const processMetricsTable = generateProcessMetricsTable(metrics);
   const actionMetricsTable = generateActionMetricsTable(metrics);
@@ -54,19 +55,19 @@ export function generateDashboardHtml(metrics) {
   const statsOverview = `
     <div class="stats-overview">
       <div class="stat-box">
-        <div class="stat-number">${metrics.totalRequests}</div>
+        <div class="stat-number">${metrics.totalStats?.totalRequests || 0}</div>
         <div class="stat-label">Total Requests</div>
       </div>
       <div class="stat-box">
-        <div class="stat-number">${Object.keys(metrics.processCounts).length}</div>
+        <div class="stat-number">${metrics.totalStats?.activeProcesses || 0}</div>
         <div class="stat-label">Unique Process IDs</div>
       </div>
       <div class="stat-box">
-        <div class="stat-number">${Object.keys(metrics.actionCounts).length}</div>
+        <div class="stat-number">${metrics.actionMetrics?.length || 0}</div>
         <div class="stat-label">Different Actions</div>
       </div>
       <div class="stat-box">
-        <div class="stat-number">${metrics.ipCounts.length}</div>
+        <div class="stat-number">${metrics.clientMetrics?.ipAddresses?.length || 0}</div>
         <div class="stat-label">Unique IPs</div>
       </div>
     </div>
@@ -74,7 +75,7 @@ export function generateDashboardHtml(metrics) {
   
   // Get all JavaScript for the dashboard
   const dashboardScripts = `
-    ${getTrafficOverviewScript()}
+    ${getTimeChartScript(metrics.timeSeriesData)}
     
     // Process chart
     const processLabels = ${JSON.stringify(topProcessIds.map(id => id.substring(0, 8) + '...'))};        
@@ -206,57 +207,112 @@ export function generateDashboardHtml(metrics) {
     ${getFilterScript()}
     
     ${getRefreshControlsScript()}
+    
+    // Initialize the chart
+    initializeTimeChart();
   `;
   
-  // Assemble the complete HTML
+  // Generate traffic overview component
+  const trafficOverviewComponent = metrics.trafficOverview && metrics.trafficOverview.timeSeriesData ?
+    generateTrafficOverview(metrics.trafficOverview) : generateNoDataMessage();
+
+  // Combine all sections into the final HTML
   return `
     <!DOCTYPE html>
-    <html>
+    <html lang="en">
     <head>
-      <title>AO Router Metrics Dashboard</title>
-      <!-- Auto-refresh handled by JavaScript instead of meta tag -->
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>AO Router Dashboard</title>
+      <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
       <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
       <style>
         ${getDashboardStyles()}
-        ${getTrafficOverviewStyles()}
+        
+        /* Traffic overview specific styles */
+        .traffic-overview .filter-controls {
+          background: #f8f9fa;
+          padding: 15px;
+          border-radius: 5px;
+          margin-bottom: 20px;
+        }
+        
+        .traffic-table th {
+          background-color: #f5f5f5;
+          position: sticky;
+          left: 0;
+          z-index: 10;
+        }
+        
+        .traffic-table {
+          font-size: 0.85rem;
+        }
+        
+        .table-wrapper {
+          overflow-x: auto;
+          margin-bottom: 20px;
+          box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
       </style>
     </head>
     <body>
-      <h1>AO Router Metrics Dashboard</h1>
-      ${refreshControls}
-      
-      ${statsOverview}
-      
-      <div class="card">
-        <h2>Traffic Overview</h2>
-        ${trafficOverviewHtml}
-      </div>
-      
-      <div class="tabs">
-        <div class="tab active" data-tab="requests">Recent Requests</div>
-        <div class="tab" data-tab="processes">Process Metrics</div>
-        <div class="tab" data-tab="actions">Action Metrics</div>
-        <div class="tab" data-tab="clients">Client Metrics</div>
-      </div>
-      
-      <div class="tab-content active" id="requests-tab">
-        ${recentRequestsTable}
-      </div>
-      
-      <div class="tab-content" id="processes-tab">
-        ${processMetricsTable}
-      </div>
-      
-      <div class="tab-content" id="actions-tab">
-        ${actionMetricsTable}
-      </div>
-      
-      <div class="tab-content" id="clients-tab">
-        ${clientMetricsTable}
+      <div class="container-fluid dashboard">
+        <header>
+          <h1>AO Router Dashboard</h1>
+          ${refreshControls}
+        </header>
+        
+        <main>
+          <div class="dashboard-grid">
+            <div class="panel graph-panel">
+              <h3>Request Volume</h3>
+              ${timeControls}
+            </div>
+            
+            <div class="panel">
+              <h3>Statistics</h3>
+              ${statsOverview}
+            </div>
+
+            <!-- New Traffic Overview Panel -->
+            <div class="panel full-width">
+              ${trafficOverviewComponent}
+            </div>
+            
+            <div class="panel full-width">
+              <div class="tab-container">
+                <div class="tabs">
+                  <div class="tab active" data-target="recent-requests">Recent Requests</div>
+                  <div class="tab" data-target="process-metrics">Process Metrics</div>
+                  <div class="tab" data-target="action-metrics">Action Metrics</div>
+                  <div class="tab" data-target="client-metrics">Client Metrics</div>
+                </div>
+                
+                <div class="tab-content active" id="recent-requests">
+                  ${recentRequestsTable}
+                </div>
+                
+                <div class="tab-content" id="process-metrics">
+                  ${processMetricsTable}
+                </div>
+                
+                <div class="tab-content" id="action-metrics">
+                  ${actionMetricsTable}
+                </div>
+                
+                <div class="tab-content" id="client-metrics">
+                  ${clientMetricsTable}
+                </div>
+              </div>
+            </div>
+          </div>
+        </main>
       </div>
       
       <script>
         ${dashboardScripts}
+        ${getFilterScript()}
+        ${getRefreshControlsScript()}
       </script>
     </body>
     </html>

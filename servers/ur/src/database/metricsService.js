@@ -111,7 +111,7 @@ export async function storeMetrics(details) {
 
     // Verify the data was actually inserted
     try {
-      const verifyResult = await query('SELECT * FROM metrics_view WHERE id = $1', [id])
+      const verifyResult = await query('SELECT * FROM metrics_requests WHERE id = $1', [id])
       if (verifyResult.rows.length > 0) {
         const row = verifyResult.rows[0]
         _logger('Verified stored metrics - process_id: %s, time_received: %s', 
@@ -138,7 +138,7 @@ export async function storeMetrics(details) {
 export async function getRecentRequests(limit = 100) {
   try {
     const result = await query(
-      `SELECT * FROM metrics_view
+      `SELECT * FROM metrics_requests
        ORDER BY time_received DESC
        LIMIT $1`,
       [limit]
@@ -169,7 +169,7 @@ export async function getRecentRequests(limit = 100) {
       rawBody: row.request_raw, // Include both formats for compatibility
       action: row.action,
       duration: row.duration,
-      timestamp: row.time_received,
+      timestamp: row.time_received || row.timestamp, // Use time_received if available, timestamp as fallback
       time_received: row.time_received,
       timeReceived: row.time_received,
       time_completed: row.time_completed,
@@ -193,7 +193,7 @@ export async function getProcessMetrics() {
          COUNT(*) as request_count,
          AVG(duration) as avg_duration,
          MAX(time_received) as last_request
-       FROM metrics_view
+       FROM metrics_requests
        GROUP BY process_id
        ORDER BY request_count DESC`
     )
@@ -221,7 +221,7 @@ export async function getActionMetrics() {
          action,
          COUNT(*) as request_count,
          AVG(duration) as avg_duration
-       FROM metrics_view
+       FROM metrics_requests
        WHERE action IS NOT NULL AND action != 'unknown'
        GROUP BY action
        ORDER BY request_count DESC`
@@ -249,7 +249,7 @@ export async function getClientMetrics() {
       `SELECT 
          request_ip as ip,
          COUNT(*) as request_count
-       FROM metrics_view
+       FROM metrics_requests
        WHERE request_ip != 'unknown'
        GROUP BY request_ip
        ORDER BY request_count DESC
@@ -261,7 +261,7 @@ export async function getClientMetrics() {
       `SELECT 
          request_referrer as referrer,
          COUNT(*) as request_count
-       FROM metrics_view
+       FROM metrics_requests
        WHERE request_referrer != 'unknown'
        GROUP BY request_referrer
        ORDER BY request_count DESC
@@ -332,10 +332,10 @@ export async function getTimeSeriesData(hours = 24) {
         // Try a simpler query first to verify column access
         const simpleCheck = await query(
           `SELECT 
-             MIN(time_received) as min_time,
-             MAX(time_received) as max_time, 
+             MIN("time_received") as min_time,
+             MAX("time_received") as max_time, 
              COUNT(*) as count
-           FROM metrics_view
+           FROM metrics_requests
            LIMIT 1`
         );
         
@@ -351,17 +351,17 @@ export async function getTimeSeriesData(hours = 24) {
         // Now try the main query with quoted column names
         const result = await query(
           `SELECT 
-             date_trunc('hour', time_received) as hour,
+             date_trunc('hour', "time_received") as hour,
              COUNT(*) as total_requests,
-             jsonb_object_agg(process_id, process_count) as process_counts
+             jsonb_object_agg("process_id", process_count) as process_counts
            FROM (
              SELECT 
-               date_trunc('hour', time_received) as hour,
-               process_id,
+               date_trunc('hour', "time_received") as hour,
+               "process_id",
                COUNT(*) as process_count
-             FROM metrics_view
-             WHERE time_received > NOW() - interval '${hours} hours'
-             GROUP BY hour, process_id
+             FROM metrics_requests
+             WHERE "time_received" > NOW() - interval '${hours} hours'
+             GROUP BY hour, "process_id"
              ORDER BY hour, process_count DESC
            ) AS hourly_process_counts
            GROUP BY hour
@@ -376,7 +376,43 @@ export async function getTimeSeriesData(hours = 24) {
       }
     }
     
-    // We now only have time_received, no need to check for timestamp column
+    // Check for existence of timestamp column
+    const timestampCheck = await query(
+      `SELECT column_name 
+       FROM information_schema.columns 
+       WHERE table_name = 'metrics_requests' 
+       AND column_name = 'timestamp'`
+    );
+    
+    if (timestampCheck.rows.length > 0) {
+      // Column exists, use it
+      try {
+        const result = await query(
+          `SELECT 
+             date_trunc('hour', timestamp) as hour,
+             COUNT(*) as total_requests,
+             jsonb_object_agg(process_id, process_count) as process_counts
+           FROM (
+             SELECT 
+               date_trunc('hour', timestamp) as hour,
+               process_id,
+               COUNT(*) as process_count
+             FROM metrics_requests
+             WHERE timestamp > NOW() - interval '${hours} hours'
+             GROUP BY hour, process_id
+             ORDER BY hour, process_count DESC
+           ) AS hourly_process_counts
+           GROUP BY hour
+           ORDER BY hour ASC`,
+          [], // params
+          10000 // 10 second timeout
+        );
+        return await processTimeSeriesResults(result, hours);
+      } catch (err) {
+        _logger('Error using timestamp column: %s', err.message);
+        // Continue to fallback methods
+      }
+    }
     
     // If we get here, neither column exists or both failed, fall back to a simpler query based on ID
     _logger('Using simplified metrics query without time data');
@@ -389,7 +425,7 @@ export async function getTimeSeriesData(hours = 24) {
            SELECT 
              process_id,
              COUNT(*) as process_count
-           FROM metrics_view
+           FROM metrics_requests
            GROUP BY process_id
            ORDER BY process_count DESC
          ) AS process_counts`,
@@ -462,7 +498,7 @@ async function processTimeSeriesResults(result, hours) {
       `SELECT 
          process_id,
          COUNT(*) as request_count
-       FROM metrics_view
+       FROM metrics_requests
        GROUP BY process_id
        ORDER BY request_count DESC
        LIMIT 5`
@@ -552,7 +588,7 @@ export async function getTotalStats() {
          COUNT(DISTINCT process_id) as unique_processes,
          COUNT(DISTINCT request_ip) as unique_ips,
          MIN(time_received) as start_time
-       FROM metrics_view`
+       FROM metrics_requests`
     )
 
     const row = result.rows[0]
@@ -574,76 +610,188 @@ export async function getTotalStats() {
 }
 
 /**
+ * Get flexible time series data with customizable time ranges and intervals
+ * @param {Object} options Configuration options
+ * @param {Number} options.timeRangeMinutes Time range in minutes (default: 60)
+ * @param {Number} options.intervalSeconds Interval size in seconds (default: 60)
+ * @param {String} options.processIdFilter Optional process ID filter (substring match)
+ * @returns {Promise<Object>} Time series data
+ */
+export async function getFlexibleTimeSeriesData(options = {}) {
+  const timeRangeMinutes = options.timeRangeMinutes || 60; // Default to 1 hour
+  const intervalSeconds = options.intervalSeconds || 60; // Default to 1 minute intervals
+  const processIdFilter = options.processIdFilter || null;
+  
+  try {
+    _logger('Getting flexible time series data: range=%d minutes, interval=%d seconds, filter=%s', 
+      timeRangeMinutes, intervalSeconds, processIdFilter || 'none');
+    
+    // Build the interval expression based on seconds
+    let intervalExpr = '';
+    if (intervalSeconds < 60) {
+      // For intervals less than a minute, use seconds
+      intervalExpr = `${intervalSeconds} seconds`;
+    } else if (intervalSeconds < 3600) {
+      // For intervals less than an hour, use minutes
+      intervalExpr = `${Math.floor(intervalSeconds / 60)} minutes`;
+    } else {
+      // For intervals of an hour or more, use hours
+      intervalExpr = `${Math.floor(intervalSeconds / 3600)} hours`;
+    }
+    
+    // Build the query, adding process_id filter if needed
+    let queryParams = [];
+    let processFilterClause = '';
+    
+    if (processIdFilter) {
+      processFilterClause = 'AND process_id ILIKE $1';
+      queryParams.push(`%${processIdFilter}%`);
+    }
+    
+    const result = await query(
+      `WITH time_slots AS (
+        SELECT 
+          generate_series(
+            date_trunc('second', NOW() - interval '${timeRangeMinutes} minutes'),
+            date_trunc('second', NOW()),
+            interval '${intervalExpr}'
+          ) AS slot_start
+      )
+      SELECT 
+        time_slots.slot_start,
+        COUNT(mr.id) AS request_count,
+        COALESCE(jsonb_object_agg(
+          mr.process_id, 
+          COUNT(mr.id)
+        ) FILTER (WHERE mr.id IS NOT NULL), '{}'::jsonb) AS process_counts,
+        COALESCE(jsonb_object_agg(
+          mr.action, 
+          COUNT(mr.id)
+        ) FILTER (WHERE mr.id IS NOT NULL), '{}'::jsonb) AS action_counts,
+        COALESCE(AVG(mr.duration) FILTER (WHERE mr.id IS NOT NULL), 0) AS avg_duration
+      FROM 
+        time_slots
+      LEFT JOIN metrics_requests mr ON 
+        mr.time_received >= time_slots.slot_start AND
+        mr.time_received < time_slots.slot_start + interval '${intervalExpr}'
+        ${processFilterClause}
+      GROUP BY 
+        time_slots.slot_start
+      ORDER BY 
+        time_slots.slot_start ASC`,
+      queryParams,
+      30000 // 30 second timeout
+    );
+    
+    // Format the results
+    const timeSeriesData = result.rows.map(row => ({
+      timestamp: row.slot_start.toISOString(),
+      requestCount: parseInt(row.request_count, 10),
+      processCounts: row.process_counts || {},
+      actionCounts: row.action_counts || {},
+      avgDuration: parseFloat(row.avg_duration) || 0
+    }));
+    
+    // Generate time labels based on the interval
+    const timeLabels = timeSeriesData.map(d => {
+      const date = new Date(d.timestamp);
+      if (intervalSeconds < 60) {
+        // For intervals less than a minute, show hours:minutes:seconds
+        return `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}:${date.getSeconds().toString().padStart(2, '0')}`;
+      } else if (intervalSeconds < 3600) {
+        // For intervals less than an hour, show hours:minutes
+        return `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
+      } else {
+        // For intervals of an hour or more, show day and hour
+        return `${date.getDate()}/${date.getMonth()+1} ${date.getHours().toString().padStart(2, '0')}:00`;
+      }
+    });
+    
+    // Get unique process IDs across all time periods
+    const allProcessIds = new Set();
+    timeSeriesData.forEach(data => {
+      Object.keys(data.processCounts).forEach(pid => allProcessIds.add(pid));
+    });
+    
+    // Get unique actions across all time periods
+    const allActions = new Set();
+    timeSeriesData.forEach(data => {
+      Object.keys(data.actionCounts).forEach(action => allActions.add(action));
+    });
+    
+    return {
+      timeSeriesData,
+      timeLabels,
+      uniqueProcessIds: Array.from(allProcessIds),
+      uniqueActions: Array.from(allActions),
+      totalRequests: timeSeriesData.reduce((sum, data) => sum + data.requestCount, 0),
+      startTime: timeSeriesData.length > 0 ? timeSeriesData[0].timestamp : null,
+      endTime: timeSeriesData.length > 0 ? timeSeriesData[timeSeriesData.length - 1].timestamp : null
+    };
+  } catch (error) {
+    _logger('Error getting flexible time series data: %O', error);
+    return {
+      timeSeriesData: [],
+      timeLabels: [],
+      uniqueProcessIds: [],
+      uniqueActions: [],
+      totalRequests: 0,
+      startTime: null,
+      endTime: null
+    };
+  }
+}
+
+/**
  * Get all metrics for dashboard display
  * @returns {Promise<Object>} All metrics
  */
 export async function getAllMetrics() {
   try {
-    const recentRequests = await getRecentRequests(100)
-    
-    // Group request details by processId
-    const requestDetails = {}
-    for (const req of recentRequests) {
-      if (!requestDetails[req.processId]) {
-        requestDetails[req.processId] = []
-      }
-      requestDetails[req.processId].push(req)
-    }
-    
-    const processMetrics = await getProcessMetrics()
-    const actionMetrics = await getActionMetrics()
-    const clientMetrics = await getClientMetrics()
-    const { timeSeriesData, timeLabels, topProcessIds } = await getTimeSeriesData(24)
-    const totals = await getTotalStats()
+    const recentRequests = await getRecentRequests(100);
+    const processMetrics = await getProcessMetrics();
+    const actionMetrics = await getActionMetrics();
+    const clientMetrics = await getClientMetrics();
+    const timeSeriesData = await getTimeSeriesData(24);
+    const totalStats = await getTotalStats();
+    const trafficOverview = await getFlexibleTimeSeriesData({ timeRangeMinutes: 60, intervalSeconds: 60 });
     
     return {
       recentRequests,
-      requestDetails,
-      processCounts: processMetrics.reduce((obj, metric) => {
-        obj[metric.processId] = metric.requestCount
-        return obj
-      }, {}),
-      processTiming: processMetrics.reduce((obj, metric) => {
-        obj[metric.processId] = { avgDuration: metric.avgDuration }
-        return obj
-      }, {}),
-      actionCounts: actionMetrics.reduce((obj, metric) => {
-        obj[metric.action] = metric.requestCount
-        return obj
-      }, {}),
-      actionTiming: actionMetrics.reduce((obj, metric) => {
-        obj[metric.action] = { avgDuration: metric.avgDuration }
-        return obj
-      }, {}),
-      ipCounts: clientMetrics.ipCounts,
-      referrerCounts: clientMetrics.referrerCounts,
+      processMetrics,
+      actionMetrics,
+      clientMetrics,
       timeSeriesData,
-      timeLabels,
-      topProcessIds,
-      totalRequests: totals.totalRequests,
-      uniqueProcesses: totals.uniqueProcesses,
-      uniqueIps: totals.uniqueIps,
-      startTime: totals.startTime
-    }
+      totalStats,
+      trafficOverview
+    };
   } catch (error) {
-    _logger('Error getting all metrics: %O', error)
+    _logger('Error getting all metrics: %O', error);
     return {
       recentRequests: [],
-      requestDetails: {},
-      processCounts: {},
-      processTiming: {},
-      actionCounts: {},
-      actionTiming: {},
-      ipCounts: [],
-      referrerCounts: [],
-      timeSeriesData: [],
-      timeLabels: [],
-      topProcessIds: [],
-      totalRequests: 0,
-      uniqueProcesses: 0,
-      uniqueIps: 0,
-      startTime: new Date().toISOString()
-    }
+      processMetrics: [],
+      actionMetrics: [],
+      clientMetrics: {
+        ipAddresses: [],
+        referrers: []
+      },
+      timeSeriesData: {
+        timeSeriesData: [],
+        timeLabels: []
+      },
+      totalStats: {
+        totalRequests: 0,
+        avgDuration: 0,
+        activeProcesses: 0
+      },
+      trafficOverview: {
+        timeSeriesData: [],
+        timeLabels: [],
+        uniqueProcessIds: [],
+        uniqueActions: [],
+        totalRequests: 0
+      }
+    };
   }
 }
 
