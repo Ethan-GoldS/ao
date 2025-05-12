@@ -46,7 +46,7 @@ export async function getTrafficData(options) {
         jsonb_object_agg(COALESCE(action, 'unknown'), action_count) AS action_counts
       FROM (
         SELECT 
-          time_received,
+          time_bucket($1, time_received) AS time_bucket,
           action,
           COUNT(*) AS action_count
         FROM metrics_requests
@@ -62,7 +62,7 @@ export async function getTrafficData(options) {
 
     // Complete the query with grouping and ordering
     sql += `
-        GROUP BY time_received, action
+        GROUP BY time_bucket, action
       ) AS detailed
       GROUP BY bucket_time
       ORDER BY bucket_time ASC
