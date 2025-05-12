@@ -11,9 +11,9 @@ export function generateTrafficOverviewHtml() {
   return `
     <div class="traffic-overview-container">
       <div class="traffic-overview-header">
-        <h3><i class="bi bi-bar-chart-line-fill"></i> Traffic Overview</h3>
+        <h3>Traffic Overview</h3>
         <div class="traffic-overview-description">
-          Real-time visualization of API request traffic with customizable time ranges.
+          Monitor request traffic with customizable time ranges and grouping intervals.
         </div>
       </div>
       
@@ -126,34 +126,21 @@ export function getTrafficOverviewStyles() {
       border-radius: 10px;
       padding: 20px;
       margin-bottom: 30px;
-      box-shadow: 0 6px 15px rgba(0,0,0,0.1);
-      border-top: 3px solid #3498db;
+      box-shadow: 0 4px 8px rgba(0,0,0,0.1);
     }
     
     .traffic-overview-header {
       margin-bottom: 20px;
-      border-bottom: 1px solid #eee;
-      padding-bottom: 15px;
     }
     
     .traffic-overview-header h3 {
       margin-bottom: 10px;
       color: #2c3e50;
-      font-size: 1.4rem;
-      font-weight: 600;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-    
-    .traffic-overview-header h3 i {
-      color: #3498db;
     }
     
     .traffic-overview-description {
       color: #7f8c8d;
       font-size: 0.9rem;
-      font-style: italic;
     }
     
     .traffic-controls {
@@ -219,10 +206,6 @@ export function getTrafficOverviewStyles() {
       position: relative;
       height: 300px;
       margin-bottom: 30px;
-      background-color: #f8f9fa;
-      border-radius: 8px;
-      padding: 20px;
-      box-shadow: inset 0 0 5px rgba(0,0,0,0.05);
     }
     
     .traffic-table-container {
@@ -246,44 +229,22 @@ export function getTrafficOverviewStyles() {
     
     #trafficTable {
       width: 100%;
-      border-collapse: separate;
-      border-spacing: 0;
-      border-radius: 8px;
-      overflow: hidden;
     }
     
     #trafficTable th {
-      background-color: #3498db;
+      background-color: #f8f9fa;
       border-top: none;
       font-weight: 600;
-      color: white;
-      padding: 12px 15px;
-      text-align: left;
-    }
-    
-    #trafficTable td {
-      padding: 12px 15px;
-      border-bottom: 1px solid #eee;
-    }
-    
-    #trafficTable tr:last-child td {
-      border-bottom: none;
-    }
-    
-    #trafficTable tr:hover td {
-      background-color: #f5f9ff;
+      color: #2c3e50;
     }
     
     .action-tag {
       display: inline-block;
-      padding: 4px 10px;
+      padding: 2px 8px;
       margin: 2px;
-      border-radius: 20px;
+      border-radius: 12px;
       font-size: 0.8rem;
-      background-color: #e1f0fa;
-      color: #3498db;
-      border: 1px solid #d0e6f6;
-      font-weight: 500;
+      background-color: #e9ecef;
     }
     
     .refresh-interval-group {
@@ -346,17 +307,8 @@ export function getTrafficOverviewScript() {
     // Traffic Overview initialization
     function initializeTrafficOverview() {
       // Set up Chart.js configuration
-      const chartCanvas = document.getElementById('trafficChart');
-      if (!chartCanvas) {
-        console.error('Traffic chart canvas not found');
-        return;
-      }
-      
-      const ctx = chartCanvas.getContext('2d');
-      let trafficChart;
-      
-      try {
-        trafficChart = new Chart(ctx, {
+      const ctx = document.getElementById('trafficChart').getContext('2d');
+      const trafficChart = new Chart(ctx, {
         type: 'line',
         data: {
           labels: [],
@@ -409,48 +361,26 @@ export function getTrafficOverviewScript() {
       // Set up event listeners
       setupEventListeners(trafficChart);
       
+      // Initial data load
+      loadTrafficData(trafficChart);
+      
       // Load process ID suggestions
       loadProcessIdSuggestions();
       
-      // Add chart instance check to the load function
-      function loadTrafficDataSafe(graceful = false) {
-        if (window.trafficChart) {
-          loadTrafficData(window.trafficChart, graceful);
-        } else {
-          console.error('Traffic chart not available');
-        }
-      }
-      
       // Store chart in window for potential external access
-      if (trafficChart) {
-        window.trafficChart = trafficChart;
-        
-        // Initial data load
-        loadTrafficData(trafficChart);
-        
-        // Register with global refresh system if available
-        if (window.dashboardRefresh) {
-          window.dashboardRefresh.register(function(graceful) {
-            loadTrafficData(trafficChart, graceful);
-          });
-        }
-      } else {
-        console.error('Failed to initialize traffic chart');
-      }
+      window.trafficChart = trafficChart;
       
-      // Set up event listener for manual refresh button
-      const refreshButton = document.getElementById('refreshTrafficData');
-      if (refreshButton) {
-        refreshButton.addEventListener('click', function() {
-          if (window.trafficChart) {
-            loadTrafficData(window.trafficChart, false); // Manual refresh is not graceful
-          } else {
-            console.error('Traffic chart not available for refresh');
-          }
+      // Register with global refresh system if available
+      if (window.dashboardRefresh) {
+        window.dashboardRefresh.register(function(graceful) {
+          loadTrafficData(trafficChart, graceful);
         });
       }
       
-      return trafficChart;
+      // Set up event listener for manual refresh button
+      document.getElementById('refreshTrafficData').addEventListener('click', function() {
+        loadTrafficData(trafficChart, false); // Manual refresh is not graceful
+      });
     }
     
     // Initialize date pickers with default values
@@ -685,11 +615,6 @@ export function getTrafficOverviewScript() {
     
     // Update traffic chart and table with new data
     function updateTrafficVisualization(chart, data, graceful = false) {
-      if (!chart) {
-        console.error('Chart reference is undefined');
-        return;
-      }
-      
       if (!data || !data.trafficData || !Array.isArray(data.trafficData) || data.error) {
         if (!graceful) {
           showErrorMessage(data.error || 'Invalid data received from server');
