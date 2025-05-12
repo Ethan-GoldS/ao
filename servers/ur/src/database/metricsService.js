@@ -325,49 +325,74 @@ export async function getTimeSeriesData(hours = 24) {
     
     _logger('time_received column exists: %s', columnCheck.rows.length > 0);
     
+    // Let's first determine the actual column name case by querying the schema directly
+    const schemaCheck = await query(
+      `SELECT column_name 
+       FROM information_schema.columns 
+       WHERE table_name = 'metrics_requests' 
+       AND lower(column_name) = 'time_received'`
+    );
+    
+    _logger('Found schema time column matches: %O', schemaCheck.rows.map(r => r.column_name));
+    
+    // Use the actual column name from the schema if found, otherwise try common variations
+    const timeColumnName = schemaCheck.rows.length > 0 ? 
+      schemaCheck.rows[0].column_name : 'time_received';
+      
     if (columnCheck.rows.length > 0) {
       // Column exists, use it
       try {
-        _logger('Attempting to query using time_received column...');
-        // Try a simpler query first to verify column access
+        _logger('Attempting to query using time column: %s', timeColumnName);
+        
+        // Try a simple query first to verify the column works
         const simpleCheck = await query(
           `SELECT 
-             MIN("time_received") as min_time,
-             MAX("time_received") as max_time, 
              COUNT(*) as count
            FROM metrics_requests
            LIMIT 1`
         );
         
         if (simpleCheck.rows.length > 0) {
-          _logger('Simple time_received check successful - count: %d, min: %s, max: %s', 
-            simpleCheck.rows[0].count, 
-            simpleCheck.rows[0].min_time, 
-            simpleCheck.rows[0].max_time);
-        } else {
-          _logger('Simple time_received check returned no rows');
+          _logger('Table access check successful - count: %d', simpleCheck.rows[0].count);
         }
         
-        // Try the query without quotes around column names
+        // Try using a dynamic query built specifically to avoid column name issues
         const result = await query(
-          `SELECT 
-             date_trunc('hour', time_received) as hour,
-             COUNT(*) as total_requests,
-             jsonb_object_agg(process_id, process_count) as process_counts
-           FROM (
-             SELECT 
-               date_trunc('hour', time_received) as hour,
-               process_id,
-               COUNT(*) as process_count
-             FROM metrics_requests
-             WHERE time_received > NOW() - interval '${hours} hours'
-             GROUP BY hour, process_id
-             ORDER BY hour, process_count DESC
-           ) AS hourly_process_counts
-           GROUP BY hour
-           ORDER BY hour ASC`,
+          `WITH hour_slots AS (
+              SELECT 
+                date_trunc('hour', ${timeColumnName}) as hour_slot
+              FROM metrics_requests
+              WHERE ${timeColumnName} > NOW() - interval '${hours} hours'
+              GROUP BY hour_slot
+           ),
+           process_counts AS (
+              SELECT 
+                date_trunc('hour', ${timeColumnName}) as hour_slot,
+                process_id,
+                COUNT(*) as process_count
+              FROM metrics_requests
+              WHERE ${timeColumnName} > NOW() - interval '${hours} hours'
+              GROUP BY hour_slot, process_id
+           )
+           SELECT 
+             hour_slots.hour_slot as hour,
+             COALESCE(COUNT(DISTINCT process_counts.process_id), 0) as unique_processes,
+             COALESCE(SUM(process_counts.process_count), 0) as total_requests,
+             COALESCE(
+               jsonb_object_agg(
+                 process_counts.process_id, 
+                 process_counts.process_count
+               ) FILTER (WHERE process_counts.process_id IS NOT NULL),
+               '{}'::jsonb
+             ) as process_counts
+           FROM 
+             hour_slots
+           LEFT JOIN 
+             process_counts ON hour_slots.hour_slot = process_counts.hour_slot
+           GROUP BY hour_slots.hour_slot
+           ORDER BY hour_slots.hour_slot ASC`,
           [], // params
-          10000 // 10 second timeout
+          20000 // 20 second timeout
         );
         return await processTimeSeriesResults(result, hours);
       } catch (err) {
@@ -376,38 +401,71 @@ export async function getTimeSeriesData(hours = 24) {
       }
     }
     
-    // Check for existence of timestamp column
+    // Last resort: try using 'timestamp' column if it exists with the right case
     const timestampCheck = await query(
       `SELECT column_name 
        FROM information_schema.columns 
        WHERE table_name = 'metrics_requests' 
-       AND column_name = 'timestamp'`
+       AND lower(column_name) = 'timestamp'`
     );
     
     if (timestampCheck.rows.length > 0) {
-      // Column exists, use it
+      // Found the timestamp column with the correct casing
+      const actualTimestampColumn = timestampCheck.rows[0].column_name;
+      
       try {
-        _logger('Using timestamp column for time series data');
-        const result = await query(
-          `SELECT 
-             date_trunc('hour', timestamp) as hour,
-             COUNT(*) as total_requests,
-             jsonb_object_agg(process_id, process_count) as process_counts
-           FROM (
-             SELECT 
-               date_trunc('hour', timestamp) as hour,
-               process_id,
-               COUNT(*) as process_count
-             FROM metrics_requests
-             WHERE timestamp > NOW() - interval '${hours} hours'
-             GROUP BY hour, process_id
-             ORDER BY hour, process_count DESC
-           ) AS hourly_process_counts
-           GROUP BY hour
-           ORDER BY hour ASC`,
-          [], // params
-          10000 // 10 second timeout
+        _logger('Using %s column for time series data', actualTimestampColumn);
+        
+        // First, check if we can actually access the column
+        const columnAccessTest = await query(
+          `SELECT COUNT(*) 
+           FROM metrics_requests 
+           WHERE ${actualTimestampColumn} IS NOT NULL 
+           LIMIT 1`
         );
+        
+        _logger('Timestamp column access test: %d records with non-null values', 
+          columnAccessTest.rows[0].count);
+        
+        // Use the same WITH query approach to avoid nested aggregate functions
+        const result = await query(
+          `WITH hour_slots AS (
+              SELECT 
+                date_trunc('hour', ${actualTimestampColumn}) as hour_slot
+              FROM metrics_requests
+              WHERE ${actualTimestampColumn} > NOW() - interval '${hours} hours'
+              GROUP BY hour_slot
+           ),
+           process_counts AS (
+              SELECT 
+                date_trunc('hour', ${actualTimestampColumn}) as hour_slot,
+                process_id,
+                COUNT(*) as process_count
+              FROM metrics_requests
+              WHERE ${actualTimestampColumn} > NOW() - interval '${hours} hours'
+              GROUP BY hour_slot, process_id
+           )
+           SELECT 
+             hour_slots.hour_slot as hour,
+             COALESCE(COUNT(DISTINCT process_counts.process_id), 0) as unique_processes,
+             COALESCE(SUM(process_counts.process_count), 0) as total_requests,
+             COALESCE(
+               jsonb_object_agg(
+                 process_counts.process_id, 
+                 process_counts.process_count
+               ) FILTER (WHERE process_counts.process_id IS NOT NULL),
+               '{}'::jsonb
+             ) as process_counts
+           FROM 
+             hour_slots
+           LEFT JOIN 
+             process_counts ON hour_slots.hour_slot = process_counts.hour_slot
+           GROUP BY hour_slots.hour_slot
+           ORDER BY hour_slots.hour_slot ASC`,
+          [], 
+          20000 // 20 second timeout
+        );
+        
         return await processTimeSeriesResults(result, hours);
       } catch (err) {
         _logger('Error using timestamp column: %s', err.message);
