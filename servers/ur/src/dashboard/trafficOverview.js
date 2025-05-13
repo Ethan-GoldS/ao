@@ -200,6 +200,9 @@ export function getTrafficOverviewStyles() {
     
     .traffic-visualization {
       position: relative;
+      max-height: 700px;
+      overflow-y: auto;
+      padding-right: 10px;
     }
     
     .chart-container {
@@ -240,9 +243,31 @@ export function getTrafficOverviewStyles() {
     
     .action-tags-container {
       display: flex;
+      flex-direction: column;
+      gap: 10px;
+      position: relative;
+      max-height: 300px;
+      overflow-y: auto;
+      padding-right: 5px;
+    }
+    
+    .action-section {
+      border-bottom: 1px solid #eee;
+      padding-bottom: 10px;
+      margin-bottom: 10px;
+    }
+    
+    .action-section-title {
+      font-weight: bold;
+      margin-bottom: 5px;
+      color: #2c3e50;
+      font-size: 0.9rem;
+    }
+    
+    .action-tags-group {
+      display: flex;
       flex-wrap: wrap;
       gap: 5px;
-      position: relative;
     }
     
     .action-tooltip {
@@ -283,6 +308,17 @@ export function getTrafficOverviewStyles() {
       border-radius: 12px;
       font-size: 0.8rem;
       background-color: #e9ecef;
+    }
+    
+    .action-tag.dry-run-action {
+      background-color: #e6f7ff;
+      border: 1px solid #99ccff;
+    }
+    
+    .action-tag.result-action {
+      background-color: #f0f5e6;
+      border: 1px solid #d7e8be;
+      opacity: 0.85;
     }
     
     .action-name {
@@ -952,13 +988,42 @@ export function getTrafficOverviewScript() {
         actionTooltip.innerHTML = '<i class="bi bi-info-circle"></i><span class="action-tooltip-text">The number next to each action represents the count of requests with that action type during this time period.</span>';
         actionContainer.appendChild(actionTooltip);
         
-        // Create action tags
+        // Sort and organize actions by type (dry-run, result, others)
+        const dryRunActions = {};
+        const resultActions = {};
+        const otherActions = {};
+        
         Object.entries(actionCounts).forEach(function([action, count]) {
           if (action && action !== 'null' && action !== 'undefined') {
+            // Categorize actions based on their path/type
+            if (action.includes('/dry-run') || action.toLowerCase().includes('dry')) {
+              dryRunActions[action] = count;
+            } else if (action.includes('/result/') || action.toLowerCase().includes('result')) {
+              resultActions[action] = count;
+            } else {
+              otherActions[action] = count;
+            }
+          }
+        });
+        
+        // Create Dry Run Actions Section
+        if (Object.keys(dryRunActions).length > 0) {
+          const dryRunSection = document.createElement('div');
+          dryRunSection.className = 'action-section';
+          
+          const dryRunTitle = document.createElement('div');
+          dryRunTitle.className = 'action-section-title';
+          dryRunTitle.textContent = 'Dry Run Actions';
+          dryRunSection.appendChild(dryRunTitle);
+          
+          const dryRunGroup = document.createElement('div');
+          dryRunGroup.className = 'action-tags-group';
+          
+          Object.entries(dryRunActions).forEach(function([action, count]) {
             const actionTag = document.createElement('span');
             actionTag.classList.add('action-tag');
+            actionTag.classList.add('dry-run-action');
             
-            // Create a more descriptive format
             const actionName = document.createElement('span');
             actionName.className = 'action-name';
             actionName.textContent = action;
@@ -969,10 +1034,81 @@ export function getTrafficOverviewScript() {
             
             actionTag.appendChild(actionName);
             actionTag.appendChild(actionCount);
+            dryRunGroup.appendChild(actionTag);
+          });
+          
+          dryRunSection.appendChild(dryRunGroup);
+          actionContainer.appendChild(dryRunSection);
+        }
+        
+        // Create Other Actions Section (if any)
+        if (Object.keys(otherActions).length > 0) {
+          const otherSection = document.createElement('div');
+          otherSection.className = 'action-section';
+          
+          const otherTitle = document.createElement('div');
+          otherTitle.className = 'action-section-title';
+          otherTitle.textContent = 'Other Actions';
+          otherSection.appendChild(otherTitle);
+          
+          const otherGroup = document.createElement('div');
+          otherGroup.className = 'action-tags-group';
+          
+          Object.entries(otherActions).forEach(function([action, count]) {
+            const actionTag = document.createElement('span');
+            actionTag.classList.add('action-tag');
             
-            actionContainer.appendChild(actionTag);
-          }
-        });
+            const actionName = document.createElement('span');
+            actionName.className = 'action-name';
+            actionName.textContent = action;
+            
+            const actionCount = document.createElement('span');
+            actionCount.className = 'action-count';
+            actionCount.textContent = count;
+            
+            actionTag.appendChild(actionName);
+            actionTag.appendChild(actionCount);
+            otherGroup.appendChild(actionTag);
+          });
+          
+          otherSection.appendChild(otherGroup);
+          actionContainer.appendChild(otherSection);
+        }
+        
+        // Create Result Actions Section (last since less important)
+        if (Object.keys(resultActions).length > 0) {
+          const resultSection = document.createElement('div');
+          resultSection.className = 'action-section';
+          
+          const resultTitle = document.createElement('div');
+          resultTitle.className = 'action-section-title';
+          resultTitle.textContent = 'Result Actions';
+          resultSection.appendChild(resultTitle);
+          
+          const resultGroup = document.createElement('div');
+          resultGroup.className = 'action-tags-group';
+          
+          Object.entries(resultActions).forEach(function([action, count]) {
+            const actionTag = document.createElement('span');
+            actionTag.classList.add('action-tag');
+            actionTag.classList.add('result-action');
+            
+            const actionName = document.createElement('span');
+            actionName.className = 'action-name';
+            actionName.textContent = action;
+            
+            const actionCount = document.createElement('span');
+            actionCount.className = 'action-count';
+            actionCount.textContent = count;
+            
+            actionTag.appendChild(actionName);
+            actionTag.appendChild(actionCount);
+            resultGroup.appendChild(actionTag);
+          });
+          
+          resultSection.appendChild(resultGroup);
+          actionContainer.appendChild(resultSection);
+        }
         
         if (Object.keys(actionCounts).length === 0) {
           actionContainer.innerHTML += '<span class="no-actions">None</span>';
