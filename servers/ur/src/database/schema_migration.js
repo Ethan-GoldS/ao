@@ -159,12 +159,32 @@ async function migrateExistingData() {
       return true
     }
     
+    // First check if the legacy table exists before trying to migrate
+    const tableExistsResult = await query(`
+      SELECT EXISTS (
+        SELECT FROM information_schema.tables 
+        WHERE table_name = 'metrics_requests'
+      )
+    `)
+    
+    const tableExists = tableExistsResult.rows[0].exists
+    
+    if (!tableExists) {
+      _logger('Legacy metrics_requests table does not exist, skipping migration')
+      return true
+    }
+    
     _logger('Starting data migration from metrics_requests to new tables...')
     
     // Get count of records to migrate
     const countResult = await query('SELECT COUNT(*) FROM metrics_requests')
     const recordCount = parseInt(countResult.rows[0].count || '0')
     _logger('Found %d records to migrate', recordCount)
+    
+    if (recordCount === 0) {
+      _logger('No records to migrate, skipping migration')
+      return true
+    }
     
     // Process in batches to avoid memory issues
     const batchSize = 1000
