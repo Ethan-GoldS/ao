@@ -39,11 +39,32 @@ export function generateDashboardHtml(metrics) {
   // Add top process IDs to metrics
   metrics.topProcessIds = topProcessIds;
   
-  // Get time labels for charts
-  metrics.timeLabels = metrics.timeSeriesData.map(bucket => {
-    const date = new Date(bucket.timestamp);
-    return `${date.getHours()}:${String(date.getMinutes()).padStart(2, '0')}`;
-  });
+  // Use the timeLabels if already provided by the normalized metrics structure
+  if (!metrics.timeLabels || !Array.isArray(metrics.timeLabels) || metrics.timeLabels.length === 0) {
+    // If timeLabels aren't already set, try to derive them
+    if (metrics.timeSeriesDataArray && Array.isArray(metrics.timeSeriesDataArray)) {
+      // Use timeSeriesDataArray if available (from normalization)
+      metrics.timeLabels = metrics.timeSeriesDataArray.map(bucket => {
+        // If timestamp is already a formatted time string (HH:MM), use it directly
+        if (typeof bucket.timestamp === 'string' && bucket.timestamp.includes(':')) {
+          return bucket.timestamp;
+        }
+        // Otherwise parse as date
+        const date = new Date(bucket.timestamp);
+        return `${date.getHours()}:${String(date.getMinutes()).padStart(2, '0')}`;
+      });
+    } else if (Array.isArray(metrics.timeSeriesData)) {
+      // Fall back to raw timeSeriesData if it's an array
+      metrics.timeLabels = metrics.timeSeriesData.map(bucket => {
+        const date = new Date(bucket.timestamp);
+        return `${date.getHours()}:${String(date.getMinutes()).padStart(2, '0')}`;
+      });
+    } else {
+      // Last resort fallback
+      _logger('Warning: Could not generate timeLabels from available data');
+      metrics.timeLabels = [];
+    }
+  }
   
   // Generate each section of the dashboard
   const lastUpdated = new Date().toISOString();
@@ -97,8 +118,15 @@ export function generateDashboardHtml(metrics) {
     ${getTrafficOverviewScript()}
     
     // Process chart
-    const processLabels = ${JSON.stringify(topProcessIds.map(id => id.substring(0, 8) + '...'))};        
-    const processData = ${JSON.stringify(topProcessIds.map(id => metrics.processCounts[id]))};        
+    const processLabels = ${JSON.stringify(topProcessIds.map(id => id.substring(0, 8) + '...'))};
+    const processData = ${JSON.stringify(topProcessIds.map(id => metrics.processCounts[id]))};
+
+    // Add time series data for new metrics format
+    const timeSeriesLabels = ${JSON.stringify(metrics.timeLabels || [])};
+    const requestCounts = ${JSON.stringify(metrics.requestCounts || [])};
+    const dryRunCounts = ${JSON.stringify(metrics.dryRunCounts || [])};
+    const resultCounts = ${JSON.stringify(metrics.resultCounts || [])};
+        
     
     const processCtx = document.getElementById('topProcessesChart').getContext('2d');
     const processChart = new Chart(processCtx, {
