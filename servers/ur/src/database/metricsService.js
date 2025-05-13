@@ -6,6 +6,12 @@ import { query } from './db.js'
 import { logger } from '../logger.js'
 
 const _logger = logger.child('metricsService')
+
+/**
+ * Store request metrics in the database
+ * @param {Object} details Request details object
+ * @returns {Promise<boolean>} Success status
+ */
 export async function storeMetrics(details) {
   try {
     if (!details || !details.processId) {
@@ -281,110 +287,179 @@ export async function getClientMetrics() {
 /**
  * Get time series data for requests over time
  * @param {Number} hours Number of hours to include in time series
- * @param {String} interval Interval for data grouping ('minute', '5min', '10min', '15min', '30min', 'hour', 'day')
- * @param {Date} startDate Optional start date for custom time ranges
- * @param {Date} endDate Optional end date for custom time ranges
- * @param {Array} processIds Optional array of process IDs to filter by
  * @returns {Promise<Object>} Time series data
  */
-export async function getTimeSeriesData(hours = 24, interval = 'hour', startDate = null, endDate = null, processIds = null) {
+export async function getTimeSeriesData(hours = 24) {
   try {
-    // Convert interval to PostgreSQL interval string
-    let pgInterval;
-    let truncFunc;
-    
-    switch(interval) {
-      case 'minute': pgInterval = '1 minute'; truncFunc = 'minute'; break;
-      case '5min': pgInterval = '5 minutes'; truncFunc = 'hour'; break;
-      case '10min': pgInterval = '10 minutes'; truncFunc = 'hour'; break;
-      case '15min': pgInterval = '15 minutes'; truncFunc = 'hour'; break;
-      case '30min': pgInterval = '30 minutes'; truncFunc = 'hour'; break;
-      case 'hour': pgInterval = '1 hour'; truncFunc = 'hour'; break;
-      case 'day': pgInterval = '1 day'; truncFunc = 'day'; break;
-      default: pgInterval = '1 hour'; truncFunc = 'hour';
+    // Detailed logging of database schema
+    _logger('Running detailed schema check for time series data...');
+    try {
+      const tableCheck = await query(
+        `SELECT table_schema, table_name
+         FROM information_schema.tables
+         WHERE table_name = 'metrics_requests'`
+      );
+      _logger('Found metrics_requests table in schemas: %O', 
+        tableCheck.rows.map(row => row.table_schema));
+              
+      // Get all columns for the table
+      const allColumns = await query(
+        `SELECT column_name, data_type
+         FROM information_schema.columns
+         WHERE table_name = 'metrics_requests'
+         ORDER BY ordinal_position`
+      );
+      _logger('Available columns for metrics_requests: %O', 
+        allColumns.rows.map(row => `${row.column_name} (${row.data_type})`));
+    } catch (schemaErr) {
+      _logger('ERROR checking schema details: %O', schemaErr);
     }
-    
-    _logger('Getting time series data with interval: %s, hours: %d', interval, hours);
-    
-    // Check table schema and available columns
-    const allColumns = await query(
-      `SELECT column_name, data_type
-       FROM information_schema.columns
-       WHERE table_name = 'metrics_requests'
-       ORDER BY ordinal_position`
+  
+    // Check for existence of time_received column
+    const columnCheck = await query(
+      `SELECT column_name 
+       FROM information_schema.columns 
+       WHERE table_name = 'metrics_requests' 
+       AND column_name = 'time_received'`
     );
     
-    const availableColumns = allColumns.rows.map(row => row.column_name);
-    _logger('Available columns: %O', availableColumns);
+    _logger('time_received column exists: %s', columnCheck.rows.length > 0);
     
-    // Determine which timestamp column to use (time_received or timestamp)
-    const timeColumn = availableColumns.includes('time_received') ? 'time_received' : 
-                      availableColumns.includes('timestamp') ? 'timestamp' : null;
-    
-    if (!timeColumn) {
-      _logger('ERROR: No timestamp column found in metrics_requests table');
-      throw new Error('No timestamp column available in database');
+    if (columnCheck.rows.length > 0) {
+      // Column exists, use it
+      try {
+        _logger('Attempting to query using time_received column...');
+        // Try a simpler query first to verify column access
+        const simpleCheck = await query(
+          `SELECT 
+             MIN("time_received") as min_time,
+             MAX("time_received") as max_time, 
+             COUNT(*) as count
+           FROM metrics_requests
+           LIMIT 1`
+        );
+        
+        if (simpleCheck.rows.length > 0) {
+          _logger('Simple time_received check successful - count: %d, min: %s, max: %s', 
+            simpleCheck.rows[0].count, 
+            simpleCheck.rows[0].min_time, 
+            simpleCheck.rows[0].max_time);
+        } else {
+          _logger('Simple time_received check returned no rows');
+        }
+        
+        // Now try the main query with quoted column names
+        const result = await query(
+          `SELECT 
+             date_trunc('hour', "time_received") as hour,
+             COUNT(*) as total_requests,
+             jsonb_object_agg("process_id", process_count) as process_counts
+           FROM (
+             SELECT 
+               date_trunc('hour', "time_received") as hour,
+               "process_id",
+               COUNT(*) as process_count
+             FROM metrics_requests
+             WHERE "time_received" > NOW() - interval '${hours} hours'
+             GROUP BY hour, "process_id"
+             ORDER BY hour, process_count DESC
+           ) AS hourly_process_counts
+           GROUP BY hour
+           ORDER BY hour ASC`,
+          [], // params
+          10000 // 10 second timeout
+        );
+        return await processTimeSeriesResults(result, hours);
+      } catch (err) {
+        _logger('Error using time_received column: %s', err.message);
+        // Continue to fallback methods
+      }
     }
     
-    _logger('Using time column: %s', timeColumn);
+    // Check for existence of timestamp column
+    const timestampCheck = await query(
+      `SELECT column_name 
+       FROM information_schema.columns 
+       WHERE table_name = 'metrics_requests' 
+       AND column_name = 'timestamp'`
+    );
     
-    // Build the time range conditions
-    let timeCondition;
-    let params = [];
-    let paramIndex = 1;
-    
-    if (startDate && endDate) {
-      // Use custom date range
-      timeCondition = `${timeColumn} BETWEEN $${paramIndex++} AND $${paramIndex++}`;
-      params.push(new Date(startDate));
-      params.push(new Date(endDate));
-      _logger('Using custom date range: %s to %s', startDate, endDate);
-    } else {
-      // Use hours-based range
-      timeCondition = `${timeColumn} > NOW() - interval '${hours} hours'`;
-      _logger('Using last %d hours range', hours);
+    if (timestampCheck.rows.length > 0) {
+      // Column exists, use it
+      try {
+        const result = await query(
+          `SELECT 
+             date_trunc('hour', timestamp) as hour,
+             COUNT(*) as total_requests,
+             jsonb_object_agg(process_id, process_count) as process_counts
+           FROM (
+             SELECT 
+               date_trunc('hour', timestamp) as hour,
+               process_id,
+               COUNT(*) as process_count
+             FROM metrics_requests
+             WHERE timestamp > NOW() - interval '${hours} hours'
+             GROUP BY hour, process_id
+             ORDER BY hour, process_count DESC
+           ) AS hourly_process_counts
+           GROUP BY hour
+           ORDER BY hour ASC`,
+          [], // params
+          10000 // 10 second timeout
+        );
+        return await processTimeSeriesResults(result, hours);
+      } catch (err) {
+        _logger('Error using timestamp column: %s', err.message);
+        // Continue to fallback methods
+      }
     }
     
-    // Add process ID filtering if requested
-    let processCondition = '';
-    if (processIds && processIds.length > 0) {
-      const placeholders = processIds.map(() => `$${paramIndex++}`).join(',');
-      processCondition = ` AND process_id IN (${placeholders})`;
-      params = [...params, ...processIds];
-      _logger('Filtering by process IDs: %O', processIds);
-    }
-    
-    // Build the query with proper column quoting and escaping
-    const query_text = `
-      SELECT 
-        date_trunc($${paramIndex++}, ${timeColumn}) as time_bucket,
-        COUNT(*) as total_requests,
-        jsonb_object_agg(process_id, process_count) as process_counts
-      FROM (
-        SELECT 
-          date_trunc($${paramIndex++}, ${timeColumn}) as time_bucket,
-          process_id,
-          COUNT(*) as process_count
-        FROM metrics_requests
-        WHERE ${timeCondition}${processCondition}
-        GROUP BY time_bucket, process_id
-        ORDER BY time_bucket, process_count DESC
-      ) AS bucketed_counts
-      GROUP BY time_bucket
-      ORDER BY time_bucket ASC
-    `;
-    
-    // Add the interval parameters
-    params.push(truncFunc, truncFunc);
-    
-    _logger('Executing time series query with params: %O', params);
-    
+    // If we get here, neither column exists or both failed, fall back to a simpler query based on ID
+    _logger('Using simplified metrics query without time data');
     try {
-      const result = await query(query_text, params, 20000); // 20 second timeout
-      return await processTimeSeriesResults(result, hours, interval, startDate, endDate);
-    } catch (queryErr) {
-      _logger('Error executing time series query: %O', queryErr);
-      throw queryErr;
+      const result = await query(
+        `SELECT 
+           COUNT(*) as total_requests,
+           jsonb_object_agg(process_id, process_count) as process_counts
+         FROM (
+           SELECT 
+             process_id,
+             COUNT(*) as process_count
+           FROM metrics_requests
+           GROUP BY process_id
+           ORDER BY process_count DESC
+         ) AS process_counts`,
+        [], // params
+        10000 // 10 second timeout
+      );
+      
+      // Generate time series data using just the totals
+      const timeSeriesData = [];
+      const now = new Date();
+      const totalRequests = parseInt(result.rows[0]?.total_requests || 0, 10);
+      const processCounts = result.rows[0]?.process_counts || {};
+      
+      // Create empty buckets for each hour
+      for (let i = hours - 1; i >= 0; i--) {
+        const bucketTime = new Date(now.getTime() - i * 60 * 60 * 1000);
+        timeSeriesData.push({
+          timestamp: bucketTime.toISOString(),
+          hour: bucketTime.getUTCHours(),
+          totalRequests: i === 0 ? totalRequests : 0, // Put all data in the most recent bucket
+          processCounts: i === 0 ? processCounts : {}
+        });
+      }
+      
+      // Return the generated time series data
+      return {
+        timeSeriesData,
+        timeLabels: timeSeriesData.map(d => 
+          new Date(d.timestamp).getUTCHours().toString().padStart(2, '0') + ':00'
+        )
+      };
+    } catch (innerErr) {
+      _logger('Error with simplified query: %s', innerErr.message);
+      throw innerErr; // Bubble up to outer catch
     }
   } catch (error) {
     _logger('Error getting time series data: %O', error);
@@ -392,32 +467,15 @@ export async function getTimeSeriesData(hours = 24, interval = 'hour', startDate
     const timeLabels = [];
     const timeSeriesData = [];
     const now = new Date();
-    const startTime = startDate ? new Date(startDate) : new Date(now.getTime() - hours * 60 * 60 * 1000);
-    const endTime = endDate ? new Date(endDate) : now;
     
-    // Determine interval in milliseconds
-    let intervalMs;
-    switch(interval) {
-      case 'minute': intervalMs = 60 * 1000; break;
-      case '5min': intervalMs = 5 * 60 * 1000; break;
-      case '10min': intervalMs = 10 * 60 * 1000; break;
-      case '15min': intervalMs = 15 * 60 * 1000; break;
-      case '30min': intervalMs = 30 * 60 * 1000; break;
-      case 'hour': intervalMs = 60 * 60 * 1000; break;
-      case 'day': intervalMs = 24 * 60 * 60 * 1000; break;
-      default: intervalMs = 60 * 60 * 1000; // Default to hourly
-    }
-    
-    // Generate appropriate number of empty buckets
-    const duration = endTime.getTime() - startTime.getTime();
-    const numBuckets = Math.ceil(duration / intervalMs);
-    
-    for (let i = 0; i < numBuckets; i++) {
-      const bucketTime = new Date(startTime.getTime() + i * intervalMs);
-      timeLabels.push(formatDateForBucket(bucketTime, interval));
+    for (let i = hours - 1; i >= 0; i--) {
+      const date = new Date(now.getTime() - i * 60 * 60 * 1000);
+      timeLabels.push(date.getUTCHours().toString().padStart(2, '0') + ':00');
       
+      const bucketTime = new Date(now.getTime() - i * 60 * 60 * 1000);
       timeSeriesData.push({
         timestamp: bucketTime.toISOString(),
+        hour: bucketTime.getUTCHours(),
         totalRequests: 0,
         processCounts: {}
       });
@@ -428,62 +486,173 @@ export async function getTimeSeriesData(hours = 24, interval = 'hour', startDate
 }
 
 /**
- * Format date for time bucket display
- * @param {Date} date Date to format
- * @param {String} interval Interval type
- * @returns {String} Formatted date string
+ * Process time series results into expected format
+ * @param {Object} result Query result
+ * @param {Number} hours Number of hours
+ * @returns {Promise<Object>} Processed time series data
  */
-function formatDateForBucket(date, interval) {
-  if (interval === 'minute') {
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  } else if (interval === '5min' || interval === '10min' || interval === '15min' || interval === '30min') {
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  } else if (interval === 'hour') {
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  } else if (interval === 'day') {
+async function processTimeSeriesResults(result, hours) {
+  try {
+    // Get the top process IDs overall
+    const topProcessesResult = await query(
+      `SELECT 
+         process_id,
+         COUNT(*) as request_count
+       FROM metrics_requests
+       GROUP BY process_id
+       ORDER BY request_count DESC
+       LIMIT 5`
+    )
+
+    const topProcessIds = topProcessesResult.rows.map(row => row.process_id)
+
+    // Generate time labels (hour of day)
+    const timeLabels = []
+    const now = new Date()
+    for (let i = hours - 1; i >= 0; i--) {
+      const date = new Date(now.getTime() - i * 60 * 60 * 1000)
+      timeLabels.push(date.getUTCHours().toString().padStart(2, '0') + ':00')
+    }
+
+    // Fill in any missing hours with zeros
+    const timeSeriesData = []
+    const startTime = new Date(now.getTime() - hours * 60 * 60 * 1000)
+
+    for (let i = 0; i < hours; i++) {
+      const bucketTime = new Date(startTime.getTime() + i * 60 * 60 * 1000)
+      const bucketHour = date_trunc_hour(bucketTime)
+      
+      // Find matching row from query result
+      const matchingRow = result.rows.find(row => {
+        const rowTime = new Date(row.hour)
+        return date_trunc_hour(rowTime).getTime() === bucketHour.getTime()
+      })
+      
+      if (matchingRow) {
+        timeSeriesData.push({
+          timestamp: bucketHour.toISOString(),
+          hour: bucketHour.getUTCHours(),
+          totalRequests: parseInt(matchingRow.total_requests, 10),
+          processCounts: matchingRow.process_counts || {}
+        })
+      } else {
+        // No data for this hour, add empty bucket
+        timeSeriesData.push({
+          timestamp: bucketHour.toISOString(),
+          hour: bucketHour.getUTCHours(),
+          totalRequests: 0,
+          processCounts: {}
+        })
+      }
+    }
+
+    return { timeSeriesData, timeLabels, topProcessIds }
+  } catch (error) {
+    _logger('Error processing time series results: %O', error)
+    
+    // Generate empty time series data on error
+    const timeLabels = []
+    const timeSeriesData = []
+    const now = new Date()
+    
+    for (let i = hours - 1; i >= 0; i--) {
+      const date = new Date(now.getTime() - i * 60 * 60 * 1000)
+      timeLabels.push(date.getUTCHours().toString().padStart(2, '0') + ':00')
+      
+      const bucketTime = new Date(now.getTime() - i * 60 * 60 * 1000)
+      timeSeriesData.push({
+        timestamp: bucketTime.toISOString(),
+        hour: bucketTime.getUTCHours(),
+        totalRequests: 0,
+        processCounts: {}
+      })
+    }
+    
+    return {
+      timeSeriesData,
+      timeLabels,
+      topProcessIds: []
+    }
+  }
+}
+
+/**
+ * Get total statistics
+ * @returns {Promise<Object>} Total statistics
+ */
+export async function getTotalStats() {
+  try {
+    const result = await query(
+      `SELECT 
+         COUNT(*) as total_requests,
+         COUNT(DISTINCT process_id) as unique_processes,
+         COUNT(DISTINCT request_ip) as unique_ips,
+         MIN(time_received) as start_time
+       FROM metrics_requests`
+    )
+
+    const row = result.rows[0]
+    return {
+      totalRequests: parseInt(row.total_requests, 10),
+      uniqueProcesses: parseInt(row.unique_processes, 10),
+      uniqueIps: parseInt(row.unique_ips, 10),
+      startTime: row.start_time ? row.start_time.toISOString() : new Date().toISOString()
+    }
+  } catch (error) {
+    _logger('Error getting total stats: %O', error)
+    return {
+      totalRequests: 0,
+      uniqueProcesses: 0,
+      uniqueIps: 0,
+      startTime: new Date().toISOString()
+    }
+  }
+}
+
+/**
  * Get all metrics for dashboard display
- * @param {Object} options Optional filtering parameters
  * @returns {Promise<Object>} All metrics
  */
-export async function getAllMetrics(options = {}) {
+export async function getAllMetrics() {
   try {
-    _logger('Getting all metrics for dashboard with options: %O', options);
+    const recentRequests = await getRecentRequests(100)
     
-    const {
-      hours = 24,
-      interval = 'hour',
-      startDate = null,
-      endDate = null,
-      processIds = null
-    } = options;
+    // Group request details by processId
+    const requestDetails = {}
+    for (const req of recentRequests) {
+      if (!requestDetails[req.processId]) {
+        requestDetails[req.processId] = []
+      }
+      requestDetails[req.processId].push(req)
+    }
     
-    // Get overall stats
-    const stats = await getTotalStats();
+    const processMetrics = await getProcessMetrics()
+    const actionMetrics = await getActionMetrics()
+    const clientMetrics = await getClientMetrics()
+    const { timeSeriesData, timeLabels, topProcessIds } = await getTimeSeriesData(24)
+    const totals = await getTotalStats()
     
-    // Get recent requests
-    const recentRequests = await getRecentRequests(100);
-    
-    // Get process metrics (sorted by count)
-    const processes = await getProcessMetrics();
-    
-    // Get action metrics (sorted by count)
-    const actions = await getActionMetrics();
-    
-    // Get client metrics (IP and referrer)
-    const clients = await getClientMetrics();
-    
-    // Get time series data with provided options
-    const timeData = await getTimeSeriesData(hours, interval, startDate, endDate, processIds);
-    
-    // Return consolidated metrics object
     return {
-      stats,
       recentRequests,
-      processes,
-      actions,
-      clients,
-      timeData
-    };
+      requestDetails,
+      processCounts: processMetrics.reduce((obj, metric) => {
+        obj[metric.processId] = metric.requestCount
+        return obj
+      }, {}),
+      processTiming: processMetrics.reduce((obj, metric) => {
+        obj[metric.processId] = { avgDuration: metric.avgDuration }
+        return obj
+      }, {}),
+      actionCounts: actionMetrics.reduce((obj, metric) => {
+        obj[metric.action] = metric.requestCount
+        return obj
+      }, {}),
+      actionTiming: actionMetrics.reduce((obj, metric) => {
+        obj[metric.action] = { avgDuration: metric.avgDuration }
+        return obj
+      }, {}),
+      ipCounts: clientMetrics.ipCounts,
+      referrerCounts: clientMetrics.referrerCounts,
       timeSeriesData,
       timeLabels,
       topProcessIds,
