@@ -184,18 +184,10 @@ async function initDatabaseSchema() {
   // The new schema with metrics_base, metrics_dry_runs, and metrics_results 
   // is created by the schema_migration.js module
   
-  // Create indexes for faster queries
-  await query(`
-    CREATE INDEX IF NOT EXISTS idx_metrics_process_id ON metrics_requests(process_id)
-  `)
-  
-  await query(`
-    CREATE INDEX IF NOT EXISTS idx_metrics_time_received ON metrics_requests(time_received)
-  `)
-  
-  await query(`
-    CREATE INDEX IF NOT EXISTS idx_metrics_action ON metrics_requests(action)
-  `)
+  // We no longer create indexes for legacy metrics_requests table
+  // The new schema with proper indexes is handled in schema_migration.js
+  _logger('Using only the new metrics table structure with proper separation')
+  return true
 }
 
 /**
