@@ -7,9 +7,7 @@
 import { logger } from './logger.js'
 import { config } from './config.js'
 import { initializeDatabase } from './database/db.js'
-// Use the new metricsServiceV2 with improved structure for dry runs and results with messageID tracking
-import * as legacyMetricsService from './database/metricsService.js'
-import * as metricsServiceV2 from './database/metricsServiceV2.js'
+import { storeMetrics, getAllMetrics } from './database/metricsService.js'
 
 const _logger = logger.child('metrics')
 
@@ -118,16 +116,21 @@ export function recordRequestDetails(details) {
     );
   }
   
-  // Store metrics in PostgreSQL database using the new structure
-  // First try the new V2 service
-  metricsServiceV2.storeMetrics(details).catch(err => {
-    _logger('Error storing metrics in PostgreSQL V2: %O', err);
-    
-    // Fall back to legacy service if V2 fails
-    legacyMetricsService.storeMetrics(details).catch(legacyErr => {
-      _logger('Error storing metrics in legacy PostgreSQL: %O', legacyErr);
+  // Store metrics in PostgreSQL database
+  storeMetrics(details)
+    .then(success => {
+      if (success) {
+        _logger('Metrics stored successfully for process %s (duration: %dms)', 
+          details.processId, 
+          details.duration || 0
+        );
+      } else {
+        _logger('Failed to store metrics for process %s', details.processId);
+      }
+    })
+    .catch(err => {
+      _logger('Error storing metrics: %O', err);
     });
-  });
 }
 
 /**
@@ -225,93 +228,26 @@ export function finishTracking(tracking, action) {
  * Get all metrics for dashboard display
  * @returns {Promise<Object>} All metrics
  */
-/**
- * Normalize metrics structure to ensure backward compatibility with the dashboard
- * @param {Object} metrics Raw metrics from the service
- * @returns {Object} Normalized metrics compatible with dashboard
- */
-function normalizeMetricsStructure(metrics) {
-  // Make a copy to avoid modifying the original object
-  const normalizedMetrics = {...metrics};
-  
-  // Ensure all required properties exist
-  normalizedMetrics.totalRequests = normalizedMetrics.totalRequests || 0;
-  normalizedMetrics.processCounts = normalizedMetrics.processCounts || {};
-  normalizedMetrics.actionCounts = normalizedMetrics.actionCounts || {};
-  normalizedMetrics.messageIdCounts = normalizedMetrics.messageIdCounts || {};
-  normalizedMetrics.ipCounts = normalizedMetrics.ipCounts || [];
-  normalizedMetrics.referrerCounts = normalizedMetrics.referrerCounts || [];
-  
-  // If we have timeSeriesData in the new format (object with properties),
-  // extract the arrays to top level for backward compatibility
-  if (normalizedMetrics.timeSeriesData && 
-      typeof normalizedMetrics.timeSeriesData === 'object' && 
-      !Array.isArray(normalizedMetrics.timeSeriesData)) {
-    
-    const { timeLabels, requestCounts, dryRunCounts, resultCounts } = normalizedMetrics.timeSeriesData;
-    
-    // Keep the original format but also add top-level properties for the dashboard
-    normalizedMetrics.timeLabels = timeLabels || [];
-    normalizedMetrics.requestCounts = requestCounts || [];
-    normalizedMetrics.dryRunCounts = dryRunCounts || [];
-    normalizedMetrics.resultCounts = resultCounts || [];
-    
-    // Create a compatible timeSeriesData array for old code that expects it
-    const compatibilityArray = [];
-    if (timeLabels && timeLabels.length > 0) {
-      for (let i = 0; i < timeLabels.length; i++) {
-        compatibilityArray.push({
-          timestamp: timeLabels[i],
-          request_count: requestCounts[i] || 0
-        });
-      }
-    }
-    
-    // Important: Set both the original object format and array format for different parts of the dashboard
-    normalizedMetrics.timeSeriesDataOriginal = normalizedMetrics.timeSeriesData;
-    normalizedMetrics.timeSeriesData = compatibilityArray;  // Overwrite with array format for backward compatibility
-  }
-  
-  // Ensure other dashboard-required properties
-  normalizedMetrics.recentRequests = normalizedMetrics.recentRequests || [];
-  normalizedMetrics.requestDetails = normalizedMetrics.requestDetails || {};
-  
-  return normalizedMetrics;
-}
-
 export async function getMetrics() {
   try {
-    // Use new metricsServiceV2 to get metrics
-    const metrics = await metricsServiceV2.getAllMetrics();
-    
-    // Normalize the metrics structure to ensure dashboard compatibility
-    return normalizeMetricsStructure(metrics);
+    // Use the PostgreSQL metrics service to fetch all metrics
+    return await getAllMetrics();
   } catch (err) {
-    _logger('Error getting metrics from V2 service: %O', err);
-    
-    try {
-      // Fall back to legacy metrics service
-      _logger('Falling back to legacy metrics service');
-      const legacyMetrics = await legacyMetricsService.getAllMetrics();
-      return legacyMetrics;
-    } catch (legacyErr) {
-      _logger('Error getting metrics from legacy service: %O', legacyErr);
-      return {
-        totalRequests: 0,
-        dryRunCount: 0,
-        resultCount: 0,
-        processCount: 0,
-        uniqueDryRuns: 0,
-        uniqueResults: 0,
-        uniqueMessageIds: 0,
-        processCounts: {},
-        actionCounts: {},
-        messageIdCounts: {},
-        ipCounts: [],
-        referrerCounts: [],
-        timeSeriesData: [],
-        recentRequests: []
-      };
-    }
+    _logger('Error getting metrics: %O', err);
+    return {
+      recentRequests: [],
+      requestDetails: {},
+      processCounts: {},
+      processTiming: {},
+      actionCounts: {},
+      actionTiming: {},
+      ipCounts: [],
+      referrerCounts: [],
+      timeSeriesData: [],
+      timeLabels: [],
+      topProcessIds: [],
+      totalRequests: 0,
+      startTime: new Date().toISOString()
+    };
   }
 }

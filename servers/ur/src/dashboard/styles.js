@@ -50,43 +50,6 @@ export function getDashboardStyles() {
       flex-wrap: wrap;
       margin-bottom: 20px;
     }
-    
-    .stat-section {
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-      margin-right: 10px;
-    }
-    
-    .section-title {
-      margin-top: 20px;
-      margin-bottom: 10px;
-      font-size: 1.2em;
-      color: #333;
-      font-weight: bold;
-      border-bottom: 1px solid #ddd;
-      padding-bottom: 5px;
-    }
-    
-    .table-container {
-      max-height: 400px;
-      overflow-y: auto;
-      margin-bottom: 20px;
-      border: 1px solid #eee;
-      border-radius: 4px;
-    }
-    
-    .message-id-row td {
-      font-family: monospace;
-      font-size: 0.9em;
-    }
-    
-    .no-data {
-      text-align: center;
-      font-style: italic;
-      color: #777;
-      padding: 20px;
-    }
     .stat-box {
       flex: 1;
       min-width: 200px;
@@ -239,70 +202,6 @@ export function getDashboardStyles() {
       cursor: pointer;
       font-weight: bold;
       margin-left: 10px;
-    }
-    
-    /* Request type styling */
-    .request-type {
-      display: inline-block;
-      padding: 3px 8px;
-      border-radius: 12px;
-      font-size: 0.8em;
-      font-weight: bold;
-      text-transform: uppercase;
-    }
-    
-    .request-type.dry-run {
-      background-color: #e6f7ff;
-      color: #0066cc;
-      border: 1px solid #99ccff;
-    }
-    
-    .request-type.result {
-      background-color: #f0f5e6;
-      color: #4caf50;
-      border: 1px solid #8bc34a;
-    }
-    
-    .request-type.unknown {
-      background-color: #f9f9f9;
-      color: #9e9e9e;
-      border: 1px solid #e0e0e0;
-    }
-    
-    /* Type toggle container styling */
-    .type-toggle-container {
-      display: flex;
-      margin-bottom: 15px;
-    }
-    
-    .type-toggle {
-      display: flex;
-      border-radius: 4px;
-      overflow: hidden;
-      border: 1px solid #ddd;
-    }
-    
-    .type-filter-btn {
-      background: #f2f2f2;
-      border: none;
-      padding: 8px 15px;
-      cursor: pointer;
-      font-size: 0.9em;
-      transition: background-color 0.2s;
-      border-right: 1px solid #ddd;
-    }
-    
-    .type-filter-btn:last-child {
-      border-right: none;
-    }
-    
-    .type-filter-btn:hover {
-      background-color: #e0e0e0;
-    }
-    
-    .type-filter-btn.active {
-      background-color: #0066cc;
-      color: white;
     }
     .apply-btn:hover {
       background: #0055aa;

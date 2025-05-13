@@ -136,22 +136,21 @@ export async function initializeDatabase() {
       initTimeoutPromise
     ])
     
-    // Test if the new table structure exists
+    // Test if the table was created
     try {
       const tableTest = await query(
         'SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = $1)',
-        ['metrics_base']
+        ['metrics_requests']
       )
-      _logger('metrics_base table exists: %s', tableTest.rows[0].exists)
+      _logger('metrics_requests table exists: %s', tableTest.rows[0].exists)
       
-      // List all tables in our schema
-      const tablesResult = await query(
-        `SELECT table_name 
-         FROM information_schema.tables 
-         WHERE table_name LIKE 'metrics%'`
+      // List all columns in the table
+      const columnsResult = await query(
+        'SELECT column_name, data_type FROM information_schema.columns WHERE table_name = $1',
+        ['metrics_requests']
       )
       
-      _logger('Available metrics tables: %O', tablesResult.rows.map(row => row.table_name))
+      _logger('metrics_requests table columns: %O', columnsResult.rows.map(row => `${row.column_name} (${row.data_type})`))
     } catch (tableErr) {
       _logger('ERROR: Failed to check table existence: %O', tableErr)
     }
@@ -160,11 +159,6 @@ export async function initializeDatabase() {
     _logger('Running database migrations...')
     const { runMigrations } = await import('./migration.js')
     await runMigrations()
-    
-    // Run schema migration to create new tables for dry runs and results
-    _logger('Running schema migrations for new table structure...')
-    const { runSchemaMigration } = await import('./schema_migration.js')
-    await runSchemaMigration()
     
     _logger('Database initialization complete')
     return true
@@ -180,14 +174,39 @@ export async function initializeDatabase() {
  * Initialize database schema with tables and indexes
  */
 async function initDatabaseSchema() {
-  // We no longer create the legacy metrics_requests table here
-  // The new schema with metrics_base, metrics_dry_runs, and metrics_results 
-  // is created by the schema_migration.js module
+  // Create metrics table
+  await query(`
+    CREATE TABLE IF NOT EXISTS metrics_requests (
+      id SERIAL PRIMARY KEY,
+      process_id TEXT NOT NULL,
+      request_ip TEXT,
+      request_referrer TEXT,
+      request_method TEXT,
+      request_path TEXT,
+      request_user_agent TEXT,
+      request_origin TEXT,
+      request_content_type TEXT,
+      request_body JSONB,
+      request_raw TEXT,
+      action TEXT,
+      duration INTEGER,
+      time_received TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      time_completed TIMESTAMPTZ
+    )
+  `)
   
-  // We no longer create indexes for legacy metrics_requests table
-  // The new schema with proper indexes is handled in schema_migration.js
-  _logger('Using only the new metrics table structure with proper separation')
-  return true
+  // Create indexes for faster queries
+  await query(`
+    CREATE INDEX IF NOT EXISTS idx_metrics_process_id ON metrics_requests(process_id)
+  `)
+  
+  await query(`
+    CREATE INDEX IF NOT EXISTS idx_metrics_time_received ON metrics_requests(time_received)
+  `)
+  
+  await query(`
+    CREATE INDEX IF NOT EXISTS idx_metrics_action ON metrics_requests(action)
+  `)
 }
 
 /**
