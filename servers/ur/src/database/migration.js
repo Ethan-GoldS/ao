@@ -68,12 +68,14 @@ export async function runMigrations() {
     const hasTimestamp = await columnExists('metrics_requests', 'timestamp')
     const hasRequestRaw = await columnExists('metrics_requests', 'request_raw')
     const hasResponseBody = await columnExists('metrics_requests', 'response_body')
+    const hasMessageId = await columnExists('metrics_requests', 'message_id')
     
-    _logger('Column status - time_received: %s, timestamp: %s, request_raw: %s, response_body: %s', 
+    _logger('Column status - time_received: %s, timestamp: %s, request_raw: %s, response_body: %s, message_id: %s', 
       hasTimeReceived ? 'exists' : 'missing',
       hasTimestamp ? 'exists' : 'missing',
       hasRequestRaw ? 'exists' : 'missing',
-      hasResponseBody ? 'exists' : 'missing')
+      hasResponseBody ? 'exists' : 'missing',
+      hasMessageId ? 'exists' : 'missing')
     
     // Add time_received column if it doesn't exist
     if (!hasTimeReceived) {
@@ -127,6 +129,32 @@ export async function runMigrations() {
         ADD COLUMN response_body TEXT
       `)
       _logger('response_body column added successfully')
+    }
+    
+    // Add message_id column if it doesn't exist
+    if (!hasMessageId) {
+      _logger('Adding message_id column to metrics_requests table')
+      await query(`
+        ALTER TABLE metrics_requests 
+        ADD COLUMN message_id TEXT
+      `)
+      
+      // Extract message_id from path for result URLs
+      _logger('Updating existing records to populate message_id from request_path')
+      await query(`
+        UPDATE metrics_requests
+        SET message_id = substring(request_path from '/result/([^/?]+)')
+        WHERE request_path LIKE '%/result/%' AND message_id IS NULL
+      `)
+      
+      // Create index on message_id
+      _logger('Creating index on message_id')
+      await query(`
+        CREATE INDEX IF NOT EXISTS idx_metrics_message_id 
+        ON metrics_requests(message_id)
+      `)
+      
+      _logger('message_id column added and populated successfully')
     }
     
     _logger('Database migrations completed successfully')

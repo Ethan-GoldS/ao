@@ -32,6 +32,7 @@ export async function storeMetrics(details) {
       rawBody,
       responseBody, // Add response body handling
       action,
+      messageId, // Add message ID handling
       duration,
       timeReceived,
       timeCompleted
@@ -84,8 +85,8 @@ export async function storeMetrics(details) {
       `INSERT INTO metrics_requests (
         process_id, request_ip, request_referrer, request_method, 
         request_path, request_user_agent, request_origin, request_content_type,
-        request_body, request_raw, response_body, action, duration, time_received, time_completed
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+        request_body, request_raw, response_body, action, message_id, duration, time_received, time_completed
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
       RETURNING id`,
       [
         processId,
@@ -100,6 +101,7 @@ export async function storeMetrics(details) {
         rawBodyForStorage, // Use prepared raw body value
         responseBodyForStorage, // Add response body
         action || 'unknown',
+        messageId || null, // Add message ID
         duration || 0,
         timeReceived ? new Date(timeReceived) : new Date(),
         timeCompleted ? new Date(timeCompleted) : new Date()
@@ -168,6 +170,8 @@ export async function getRecentRequests(limit = 100) {
       request_raw: row.request_raw,
       rawBody: row.request_raw, // Include both formats for compatibility
       action: row.action,
+      message_id: row.message_id,
+      messageId: row.message_id, // Include both formats for compatibility
       duration: row.duration,
       timestamp: row.time_received || row.timestamp, // Use time_received if available, timestamp as fallback
       time_received: row.time_received,
@@ -211,26 +215,58 @@ export async function getProcessMetrics() {
 }
 
 /**
+ * Get message ID metrics aggregated by message ID
+ * @returns {Promise<Object>} Message ID metrics
+ */
+export async function getMessageIdMetrics() {
+  try {
+    const messageIdResult = await query(
+      `SELECT 
+         message_id,
+         COUNT(*) as request_count,
+         AVG(duration) as avg_duration,
+         MAX(time_received) as last_request
+       FROM metrics_requests 
+       WHERE message_id IS NOT NULL
+       GROUP BY message_id
+       ORDER BY request_count DESC`
+    )
+
+    return messageIdResult.rows.map(row => ({
+      message_id: row.message_id,
+      messageId: row.message_id, // Include both formats for compatibility
+      requestCount: parseInt(row.request_count),
+      avgDuration: parseFloat(row.avg_duration),
+      lastRequest: row.last_request
+    }))
+  } catch (error) {
+    _logger('Error getting message ID metrics: %O', error)
+    return []
+  }
+}
+
+/**
  * Get action metrics aggregated by action
  * @returns {Promise<Object>} Action metrics
  */
 export async function getActionMetrics() {
   try {
-    const result = await query(
+    const actionResult = await query(
       `SELECT 
          action,
          COUNT(*) as request_count,
-         AVG(duration) as avg_duration
-       FROM metrics_requests
-       WHERE action IS NOT NULL AND action != 'unknown'
+         AVG(duration) as avg_duration,
+         MAX(time_received) as last_request
+       FROM metrics_requests 
        GROUP BY action
        ORDER BY request_count DESC`
     )
 
-    return result.rows.map(row => ({
+    return actionResult.rows.map(row => ({
       action: row.action,
-      requestCount: parseInt(row.request_count, 10),
-      avgDuration: parseFloat(row.avg_duration) || 0
+      requestCount: parseInt(row.request_count),
+      avgDuration: parseFloat(row.avg_duration),
+      lastRequest: row.last_request
     }))
   } catch (error) {
     _logger('Error getting action metrics: %O', error)
@@ -615,51 +651,67 @@ export async function getTotalStats() {
  */
 export async function getAllMetrics() {
   try {
+    // Get the most recent requests
     const recentRequests = await getRecentRequests(100)
     
-    // Group request details by processId
-    const requestDetails = {}
-    for (const req of recentRequests) {
-      if (!requestDetails[req.processId]) {
-        requestDetails[req.processId] = []
+    // Get request details by process ID
+    const requestDetailsByProcessId = {}
+    recentRequests.forEach(request => {
+      if (!requestDetailsByProcessId[request.processId]) {
+        requestDetailsByProcessId[request.processId] = []
       }
-      requestDetails[req.processId].push(req)
-    }
-    
+      requestDetailsByProcessId[request.processId].push(request)
+    })
+
+    // Get process metrics
     const processMetrics = await getProcessMetrics()
+    
+    // Get action metrics
     const actionMetrics = await getActionMetrics()
+    
+    // Get message ID metrics
+    const messageIdMetrics = await getMessageIdMetrics()
+    
+    // Get client metrics
     const clientMetrics = await getClientMetrics()
-    const { timeSeriesData, timeLabels, topProcessIds } = await getTimeSeriesData(24)
-    const totals = await getTotalStats()
+    
+    // Get time series data for the last 24 hours
+    const timeSeriesData = await getTimeSeriesData(24)
+    
+    // Get total stats
+    const totalStats = await getTotalStats()
+    
+    // Prepare counts for dashboard
+    const processCounts = {}
+    processMetrics.forEach(process => {
+      processCounts[process.processId] = process.requestCount
+    })
+    
+    const actionCounts = {}
+    actionMetrics.forEach(action => {
+      actionCounts[action.action] = action.requestCount
+    })
+    
+    const messageIdCounts = {}
+    messageIdMetrics.forEach(msg => {
+      messageIdCounts[msg.messageId] = msg.requestCount
+    })
     
     return {
       recentRequests,
-      requestDetails,
-      processCounts: processMetrics.reduce((obj, metric) => {
-        obj[metric.processId] = metric.requestCount
-        return obj
-      }, {}),
-      processTiming: processMetrics.reduce((obj, metric) => {
-        obj[metric.processId] = { avgDuration: metric.avgDuration }
-        return obj
-      }, {}),
-      actionCounts: actionMetrics.reduce((obj, metric) => {
-        obj[metric.action] = metric.requestCount
-        return obj
-      }, {}),
-      actionTiming: actionMetrics.reduce((obj, metric) => {
-        obj[metric.action] = { avgDuration: metric.avgDuration }
-        return obj
-      }, {}),
-      ipCounts: clientMetrics.ipCounts,
-      referrerCounts: clientMetrics.referrerCounts,
+      requestDetails: requestDetailsByProcessId,
+      processMetrics,
+      actionMetrics,
+      messageIdMetrics,
+      clientMetrics,
       timeSeriesData,
-      timeLabels,
-      topProcessIds,
-      totalRequests: totals.totalRequests,
-      uniqueProcesses: totals.uniqueProcesses,
-      uniqueIps: totals.uniqueIps,
-      startTime: totals.startTime
+      totalStats,
+      processCounts,
+      actionCounts,
+      messageIdCounts,
+      ipCounts: clientMetrics.ipMetrics || [],
+      referrerCounts: clientMetrics.referrerMetrics || [],
+      totalRequests: totalStats.totalRequests
     }
   } catch (error) {
     _logger('Error getting all metrics: %O', error)

@@ -308,16 +308,56 @@ export function generateProcessMetricsTable(metrics) {
   `;
 }
 
+export function generateMessageIdMetricsTable(metrics) {
+  // Generate Message ID metrics table
+  const messageIdMetricsHtml = Object.entries(metrics.messageIdCounts || {})
+    .sort((a, b) => b[1] - a[1]) // Sort by count descending
+    .map(([messageId, count]) => {
+      // Get timing data if available
+      const messageIdData = metrics.messageIdMetrics?.find(m => m.messageId === messageId);
+      const avgDuration = messageIdData?.avgDuration || 0;
+      
+      return `
+        <tr class="message-id-row">
+          <td>${messageId}</td>
+          <td>${count}</td>
+          <td>${avgDuration.toFixed(2)}ms</td>
+        </tr>
+      `;
+    }).join('');
+
+  return `
+    <div class="filter-group">
+      <input type="text" class="filter-input" id="messageIdFilter" placeholder="Filter by message ID..." />
+    </div>
+    <table id="messageIdTable">
+      <thead>
+        <tr>
+          <th>Message ID</th>
+          <th>Request Count</th>
+          <th>Average Duration</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${messageIdMetricsHtml || '<tr><td colspan="3">No message ID metrics recorded yet</td></tr>'}
+      </tbody>
+    </table>
+  `;
+}
+
 export function generateActionMetricsTable(metrics) {
   const actionMetricsHtml = Object.entries(metrics.actionCounts)
     .sort((a, b) => b[1] - a[1]) // Sort by count descending
     .map(([action, count]) => {
-      const timing = metrics.actionTiming[action] || { avgDuration: 0 };
+      // Get timing data if available
+      const actionData = metrics.actionMetrics?.find(a => a.action === action);
+      const avgDuration = actionData?.avgDuration || 0;
+      
       return `
         <tr class="action-row" data-action="${action}">
           <td>${action}</td>
           <td>${count}</td>
-          <td>${timing.avgDuration.toFixed(2)}ms</td>
+          <td>${avgDuration.toFixed(2)}ms</td>
         </tr>
       `;
     }).join('');
@@ -407,7 +447,14 @@ export function getFilterScript() {
       applyTableFilter('recentRequestsTable', filterText);
       applyTableFilter('processMetricsTable', filterText);
       applyTableFilter('actionMetricsTable', filterText);
+      applyTableFilter('messageIdTable', filterText);
       applyTableFilter('clientMetricsTable', filterText);
+    });
+    
+    // Message ID filter
+    document.getElementById('messageIdFilter')?.addEventListener('input', function(e) {
+      const filterText = e.target.value.toLowerCase();
+      applyTableFilter('messageIdTable', filterText);
     });
     
     // Request type filter toggle

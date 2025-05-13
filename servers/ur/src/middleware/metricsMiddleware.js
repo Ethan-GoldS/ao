@@ -251,15 +251,29 @@ export function metricsMiddleware() {
           }
         }
         
-        // Try to extract action from URL or path if not found in response
-        if (!action && req.path) {
+        // Extract messageId and action from URL or path
+        let messageId = null;
+        if (req.path) {
           // Extract action from path parts
           const pathParts = req.path.split('/');
-          if (pathParts.length > 0) {
-            // Use the last meaningful part of the path
-            const lastPart = pathParts[pathParts.length - 1];
-            if (lastPart && lastPart !== 'dry-run') {
-              action = lastPart;
+          if (pathParts.length > 1) {
+            // Check if this is a result request with a message ID
+            if (pathParts.includes('result') && pathParts.length > pathParts.indexOf('result') + 1) {
+              // Get the message ID which follows 'result' in the path
+              const messageIdIndex = pathParts.indexOf('result') + 1;
+              if (messageIdIndex < pathParts.length) {
+                messageId = pathParts[messageIdIndex];
+                action = 'result'; // Set the action to 'result' not the message ID
+              }
+            }
+            // If no action found yet, and not a result request, use the last path segment as action
+            else if (!action && pathParts.length > 0) {
+              const lastPart = pathParts[pathParts.length - 1];
+              if (lastPart && lastPart !== 'dry-run') {
+                action = lastPart;
+              } else if (pathParts.includes('dry-run')) {
+                action = 'dry-run';
+              }
             }
           }
         }
@@ -338,6 +352,7 @@ export function metricsMiddleware() {
           processId,         // Ensure processId is correctly passed
           duration,          // Include the calculated duration
           action: action || 'unknown',
+          messageId,         // Include the message ID if present
           // Add timing details for debugging
           timing: {
             startTime: tracking.startTime,
