@@ -30,9 +30,9 @@ export async function storeMetrics(details) {
       contentType,
       requestBody,
       rawBody,
-      responseBody, // Add response body handling
+      responseBody,
       action,
-      messageId, // Add message ID handling
+      messageId,
       duration,
       timeReceived,
       timeCompleted
@@ -49,111 +49,100 @@ export async function storeMetrics(details) {
       }
     }
 
-    // Here we're making sure raw body is a string and properly formatted for DB storage
-    let rawBodyForStorage = null;
+    // Get all available columns for dynamic query building
+    const columnsResult = await query(
+      `SELECT column_name 
+       FROM information_schema.columns 
+       WHERE table_name = 'metrics_requests'`
+    )
+    
+    const availableColumns = columnsResult.rows.map(row => row.column_name)
+    _logger('Available metrics_requests columns: %s', availableColumns.join(', '))
+
+    // Process raw body for storage
+    const maxStorageSize = 100000 // 100 KB max storage
+    let rawBodyForStorage = null
     if (rawBody) {
       if (typeof rawBody === 'string') {
-        rawBodyForStorage = rawBody;
+        rawBodyForStorage = rawBody.length > maxStorageSize ? 
+          rawBody.substring(0, maxStorageSize) + '...[truncated]' : rawBody
       } else {
         try {
-          rawBodyForStorage = JSON.stringify(rawBody);
+          const stringified = JSON.stringify(rawBody)
+          rawBodyForStorage = stringified.length > maxStorageSize ? 
+            stringified.substring(0, maxStorageSize) + '...[truncated]' : stringified
         } catch (e) {
-          _logger('Failed to stringify raw body: %s', e.message);
-          // Use string representation as fallback
-          rawBodyForStorage = String(rawBody);
+          _logger('Failed to stringify raw body: %s', e.message)
+          rawBodyForStorage = String(rawBody).substring(0, maxStorageSize) + '...[truncated]'
         }
       }
     }
 
-    // Store response body too if available
-    let responseBodyForStorage = null;
+    // Process response body for storage
+    let responseBodyForStorage = null
     if (responseBody) {
       if (typeof responseBody === 'string') {
-        responseBodyForStorage = responseBody;
+        responseBodyForStorage = responseBody.length > maxStorageSize ? 
+          responseBody.substring(0, maxStorageSize) + '...[truncated]' : responseBody
       } else {
         try {
-          responseBodyForStorage = JSON.stringify(responseBody);
+          const stringified = JSON.stringify(responseBody)
+          responseBodyForStorage = stringified.length > maxStorageSize ? 
+            stringified.substring(0, maxStorageSize) + '...[truncated]' : stringified
         } catch (e) {
-          _logger('Failed to stringify response body: %s', e.message);
-          responseBodyForStorage = String(responseBody);
+          _logger('Failed to stringify response body: %s', e.message)
+          responseBodyForStorage = String(responseBody).substring(0, maxStorageSize) + '...[truncated]'
         }
       }
     }
 
-    // Try to determine if the message_id column exists
-    let hasMessageIdColumn = true;
-    try {
-      const columnCheck = await query(
-        `SELECT column_name FROM information_schema.columns 
-         WHERE table_name = 'metrics_requests' AND column_name = 'message_id'`
-      );
-      hasMessageIdColumn = columnCheck.rows.length > 0;
-      _logger('message_id column exists: %s', hasMessageIdColumn);
-    } catch (error) {
-      _logger('Error checking for message_id column: %O', error);
-      hasMessageIdColumn = false;
-    }
-    
-    // Use the appropriate insert statement based on column existence
-    let result;
-    if (hasMessageIdColumn) {
-      // Insert with message_id column
-      result = await query(
-        `INSERT INTO metrics_requests (
-          process_id, request_ip, request_referrer, request_method, 
-          request_path, request_user_agent, request_origin, request_content_type,
-          request_body, request_raw, response_body, action, message_id, duration, time_received, time_completed
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
-        RETURNING id`,
-        [
-          processId,
-          ip || 'unknown',
-          referer || 'unknown',
-          method || 'unknown',
-          path || 'unknown',
-          userAgent || 'unknown',
-          origin || 'unknown',
-          contentType || 'unknown',
-          parsedBody ? JSON.stringify(parsedBody) : null,
-          rawBodyForStorage,
-          responseBodyForStorage,
-          action || 'unknown',
-          messageId || null,
-          duration || 0,
-          timeReceived ? new Date(timeReceived) : new Date(),
-          timeCompleted ? new Date(timeCompleted) : new Date()
-        ]
-      );
-    } else {
-      // Insert without message_id column
-      result = await query(
-        `INSERT INTO metrics_requests (
-          process_id, request_ip, request_referrer, request_method, 
-          request_path, request_user_agent, request_origin, request_content_type,
-          request_body, request_raw, response_body, action, duration, time_received, time_completed
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
-        RETURNING id`,
-        [
-          processId,
-          ip || 'unknown',
-          referer || 'unknown',
-          method || 'unknown',
-          path || 'unknown',
-          userAgent || 'unknown',
-          origin || 'unknown',
-          contentType || 'unknown',
-          parsedBody ? JSON.stringify(parsedBody) : null,
-          rawBodyForStorage, // Use prepared raw body value
-          responseBodyForStorage, // Add response body
-          action || 'unknown',
-          // Note: messageId removed from this query since the column doesn't exist
-          duration || 0,
-          timeReceived ? new Date(timeReceived) : new Date(),
-          timeCompleted ? new Date(timeCompleted) : new Date()
-        ]
-      );
-    }
+    // Build column and value arrays for dynamic query
+    const columns = []
+    const values = []
+    const placeholders = []
+    let paramIndex = 1
 
+    // Define mappings of column names to values
+    const columnMappings = [
+      { name: 'process_id', value: processId },
+      { name: 'request_ip', value: ip || 'unknown' },
+      { name: 'request_referrer', value: referer || 'unknown' },
+      { name: 'request_method', value: method || 'unknown' },
+      { name: 'request_path', value: path || 'unknown' },
+      { name: 'request_user_agent', value: userAgent || 'unknown' },
+      { name: 'request_origin', value: origin || 'unknown' },
+      { name: 'request_content_type', value: contentType || 'unknown' },
+      { name: 'request_body', value: parsedBody ? JSON.stringify(parsedBody) : null },
+      { name: 'request_raw', value: rawBodyForStorage },
+      { name: 'response_body', value: responseBodyForStorage },
+      { name: 'action', value: action || 'unknown' },
+      { name: 'message_id', value: messageId || null },
+      { name: 'duration', value: duration || 0 },
+      { name: 'time_received', value: timeReceived ? new Date(timeReceived) : new Date() },
+      { name: 'time_completed', value: timeCompleted ? new Date(timeCompleted) : new Date() }
+    ]
+
+    // Only include columns that exist in the database
+    columnMappings.forEach(mapping => {
+      if (availableColumns.includes(mapping.name)) {
+        columns.push(`"${mapping.name}"`)
+        values.push(mapping.value)
+        placeholders.push(`$${paramIndex++}`)
+      } else {
+        _logger('Skipping column %s (not in schema)', mapping.name)
+      }
+    })
+
+    // Build and execute the query
+    const queryText = `
+      INSERT INTO metrics_requests (
+        ${columns.join(', ')}
+      ) VALUES (
+        ${placeholders.join(', ')}
+      ) RETURNING id
+    `
+
+    const result = await query(queryText, values)
     const id = result.rows[0]?.id
     _logger('Successfully stored metrics for process %s with ID %d', processId, id)
 
@@ -266,28 +255,77 @@ export async function getProcessMetrics() {
  */
 export async function getMessageIdMetrics() {
   try {
-    const messageIdResult = await query(
-      `SELECT 
-         message_id,
-         COUNT(*) as request_count,
-         AVG(duration) as avg_duration,
-         MAX(time_received) as last_request
-       FROM metrics_requests 
-       WHERE message_id IS NOT NULL
-       GROUP BY message_id
-       ORDER BY request_count DESC`
-    )
-
-    return messageIdResult.rows.map(row => ({
-      message_id: row.message_id,
-      messageId: row.message_id, // Include both formats for compatibility
-      requestCount: parseInt(row.request_count),
-      avgDuration: parseFloat(row.avg_duration),
-      lastRequest: row.last_request
-    }))
+    _logger('Getting message ID metrics...');
+    
+    // First check if the message_id column exists
+    const columnCheck = await query(
+      `SELECT column_name 
+       FROM information_schema.columns 
+       WHERE table_name = 'metrics_requests' 
+       AND column_name = 'message_id'`
+    );
+    
+    if (columnCheck.rows.length === 0) {
+      _logger('Message ID column does not exist in metrics_requests table');
+      return [];
+    }
+    
+    // Check for time column to use in the query
+    const timeColumnCheck = await query(
+      `SELECT column_name 
+       FROM information_schema.columns 
+       WHERE table_name = 'metrics_requests' 
+       AND column_name IN ('time_received', 'timestamp')`
+    );
+    
+    const availableTimeColumns = timeColumnCheck.rows.map(row => row.column_name);
+    let timeColumn = availableTimeColumns.includes('time_received') ? 'time_received' : 
+                     availableTimeColumns.includes('timestamp') ? 'timestamp' : null;
+    
+    let queryText;
+    if (timeColumn) {
+      _logger('Using %s column for message ID metrics time data', timeColumn);
+      queryText = `SELECT 
+        "message_id", 
+        COUNT(*) as request_count,
+        MIN("${timeColumn}") as first_seen,
+        MAX("${timeColumn}") as last_seen
+      FROM metrics_requests
+      WHERE "message_id" IS NOT NULL
+      GROUP BY "message_id"
+      ORDER BY request_count DESC, last_seen DESC
+      LIMIT 500`;
+    } else {
+      _logger('No time column available, querying message ID metrics without time data');
+      queryText = `SELECT 
+        "message_id", 
+        COUNT(*) as request_count
+      FROM metrics_requests
+      WHERE "message_id" IS NOT NULL
+      GROUP BY "message_id"
+      ORDER BY request_count DESC
+      LIMIT 500`;
+    }
+    
+    const result = await query(
+      queryText,
+      [],
+      15000 // 15 second timeout
+    );
+    
+    return result.rows.map(row => {
+      // Ensure all expected properties exist even if time columns didn't exist
+      if (!row.hasOwnProperty('first_seen')) {
+        row.first_seen = null;
+      }
+      if (!row.hasOwnProperty('last_seen')) {
+        row.last_seen = null;
+      }
+      return row;
+    });
   } catch (error) {
-    _logger('Error getting message ID metrics: %O', error)
-    return []
+    _logger('Error getting message ID metrics: %O', error);
+    return [];
   }
 }
 
@@ -373,76 +411,48 @@ export async function getClientMetrics() {
  */
 export async function getTimeSeriesData(hours = 24) {
   try {
-    // Detailed logging of database schema
-    _logger('Running detailed schema check for time series data...');
-    try {
-      const tableCheck = await query(
-        `SELECT table_schema, table_name
-         FROM information_schema.tables
-         WHERE table_name = 'metrics_requests'`
-      );
-      _logger('Found metrics_requests table in schemas: %O', 
-        tableCheck.rows.map(row => row.table_schema));
-              
-      // Get all columns for the table
-      const allColumns = await query(
-        `SELECT column_name, data_type
-         FROM information_schema.columns
-         WHERE table_name = 'metrics_requests'
-         ORDER BY ordinal_position`
-      );
-      _logger('Available columns for metrics_requests: %O', 
-        allColumns.rows.map(row => `${row.column_name} (${row.data_type})`));
-    } catch (schemaErr) {
-      _logger('ERROR checking schema details: %O', schemaErr);
-    }
-  
-    // Check for existence of time_received column
-    const columnCheck = await query(
+    _logger('Getting time series data for last %d hours', hours);
+    
+    // Check which time column we can use (time_received or timestamp)
+    const columnsResult = await query(
       `SELECT column_name 
        FROM information_schema.columns 
        WHERE table_name = 'metrics_requests' 
-       AND column_name = 'time_received'`
+       AND column_name IN ('time_received', 'timestamp')`
     );
     
-    _logger('time_received column exists: %s', columnCheck.rows.length > 0);
+    const availableColumns = columnsResult.rows.map(row => row.column_name);
+    _logger('Available time columns: %s', availableColumns.join(', ') || 'none');
     
-    if (columnCheck.rows.length > 0) {
-      // Column exists, use it
+    let timeColumn = null;
+    
+    // Prefer time_received if available
+    if (availableColumns.includes('time_received')) {
+      timeColumn = 'time_received';
+      _logger('Using time_received column for time series data');
+    } else if (availableColumns.includes('timestamp')) {
+      timeColumn = 'timestamp';
+      _logger('Using timestamp column for time series data');
+    }
+    
+    // If we have a time column, try to use it
+    if (timeColumn) {
       try {
-        _logger('Attempting to query using time_received column...');
-        // Try a simpler query first to verify column access
-        const simpleCheck = await query(
-          `SELECT 
-             MIN("time_received") as min_time,
-             MAX("time_received") as max_time, 
-             COUNT(*) as count
-           FROM metrics_requests
-           LIMIT 1`
-        );
+        _logger('Querying time series data using %s column', timeColumn);
         
-        if (simpleCheck.rows.length > 0) {
-          _logger('Simple time_received check successful - count: %d, min: %s, max: %s', 
-            simpleCheck.rows[0].count, 
-            simpleCheck.rows[0].min_time, 
-            simpleCheck.rows[0].max_time);
-        } else {
-          _logger('Simple time_received check returned no rows');
-        }
-        
-        // Now try the main query with quoted column names
+        // Try the main time-based query
         const result = await query(
           `SELECT 
-             date_trunc('hour', "time_received") as hour,
+             date_trunc('hour', "${timeColumn}") as hour,
              COUNT(*) as total_requests,
              jsonb_object_agg("process_id", process_count) as process_counts
            FROM (
              SELECT 
-               date_trunc('hour', "time_received") as hour,
+               date_trunc('hour', "${timeColumn}") as hour,
                "process_id",
                COUNT(*) as process_count
              FROM metrics_requests
-             WHERE "time_received" > NOW() - interval '${hours} hours'
+             WHERE "${timeColumn}" > NOW() - interval '${hours} hours'
              GROUP BY hour, "process_id"
              ORDER BY hour, process_count DESC
            ) AS hourly_process_counts
@@ -451,64 +461,27 @@ export async function getTimeSeriesData(hours = 24) {
           [], // params
           10000 // 10 second timeout
         );
+        
         return await processTimeSeriesResults(result, hours);
       } catch (err) {
-        _logger('Error using time_received column: %s', err.message);
-        // Continue to fallback methods
+        _logger('Error using %s column: %s', timeColumn, err.message);
+        // Fall through to the next approach
       }
     }
     
-    // Check for existence of timestamp column
-    const timestampCheck = await query(
-      `SELECT column_name 
-       FROM information_schema.columns 
-       WHERE table_name = 'metrics_requests' 
-       AND column_name = 'timestamp'`
-    );
-    
-    if (timestampCheck.rows.length > 0) {
-      // Column exists, use it
-      try {
-        const result = await query(
-          `SELECT 
-             date_trunc('hour', timestamp) as hour,
-             COUNT(*) as total_requests,
-             jsonb_object_agg(process_id, process_count) as process_counts
-           FROM (
-             SELECT 
-               date_trunc('hour', timestamp) as hour,
-               process_id,
-               COUNT(*) as process_count
-             FROM metrics_requests
-             WHERE timestamp > NOW() - interval '${hours} hours'
-             GROUP BY hour, process_id
-             ORDER BY hour, process_count DESC
-           ) AS hourly_process_counts
-           GROUP BY hour
-           ORDER BY hour ASC`,
-          [], // params
-          10000 // 10 second timeout
-        );
-        return await processTimeSeriesResults(result, hours);
-      } catch (err) {
-        _logger('Error using timestamp column: %s', err.message);
-        // Continue to fallback methods
-      }
-    }
-    
-    // If we get here, neither column exists or both failed, fall back to a simpler query based on ID
-    _logger('Using simplified metrics query without time data');
+    // If time columns don't exist or query failed, fall back to ID-based query
+    _logger('Falling back to simplified metrics query without time data');
     try {
       const result = await query(
         `SELECT 
            COUNT(*) as total_requests,
-           jsonb_object_agg(process_id, process_count) as process_counts
+           jsonb_object_agg("process_id", process_count) as process_counts
          FROM (
            SELECT 
-             process_id,
+             "process_id",
              COUNT(*) as process_count
            FROM metrics_requests
-           GROUP BY process_id
+           GROUP BY "process_id"
            ORDER BY process_count DESC
          ) AS process_counts`,
         [], // params
@@ -532,39 +505,45 @@ export async function getTimeSeriesData(hours = 24) {
         });
       }
       
-      // Return the generated time series data
-      return {
-        timeSeriesData,
-        timeLabels: timeSeriesData.map(d => 
-          new Date(d.timestamp).getUTCHours().toString().padStart(2, '0') + ':00'
-        )
-      };
+      const timeLabels = timeSeriesData.map(d => 
+        new Date(d.timestamp).getUTCHours().toString().padStart(2, '0') + ':00'
+      );
+      
+      return { timeSeriesData, timeLabels };
     } catch (innerErr) {
       _logger('Error with simplified query: %s', innerErr.message);
-      throw innerErr; // Bubble up to outer catch
+      // Fall through to the empty data generation
     }
   } catch (error) {
     _logger('Error getting time series data: %O', error);
-    // Generate empty time series data
-    const timeLabels = [];
-    const timeSeriesData = [];
-    const now = new Date();
-    
-    for (let i = hours - 1; i >= 0; i--) {
-      const date = new Date(now.getTime() - i * 60 * 60 * 1000);
-      timeLabels.push(date.getUTCHours().toString().padStart(2, '0') + ':00');
-      
-      const bucketTime = new Date(now.getTime() - i * 60 * 60 * 1000);
-      timeSeriesData.push({
-        timestamp: bucketTime.toISOString(),
-        hour: bucketTime.getUTCHours(),
-        totalRequests: 0,
-        processCounts: {}
-      });
-    }
-    
-    return { timeSeriesData, timeLabels };
+    return createEmptyTimeSeriesData(hours);
   }
+}
+
+/**
+ * Creates empty time series data for use as a fallback
+ * @param {Number} hours Number of hours to include
+ * @returns {Object} Empty time series data structure
+ */
+function createEmptyTimeSeriesData(hours = 24) {
+  const timeLabels = [];
+  const timeSeriesData = [];
+  const now = new Date();
+  
+  for (let i = hours - 1; i >= 0; i--) {
+    const date = new Date(now.getTime() - i * 60 * 60 * 1000);
+    timeLabels.push(date.getUTCHours().toString().padStart(2, '0') + ':00');
+    
+    const bucketTime = new Date(now.getTime() - i * 60 * 60 * 1000);
+    timeSeriesData.push({
+      timestamp: bucketTime.toISOString(),
+      hour: bucketTime.getUTCHours(),
+      totalRequests: 0,
+      processCounts: {}
+    });
+  }
+  
+  return { timeSeriesData, timeLabels };
 }
 
 /**
