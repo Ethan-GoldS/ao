@@ -128,8 +128,12 @@ export function generateDashboardHtml(metrics) {
     const resultCounts = ${JSON.stringify(metrics.resultCounts || [])};
         
     
-    const processCtx = document.getElementById('topProcessesChart').getContext('2d');
-    const processChart = new Chart(processCtx, {
+    // Defensive chart initialization with error handling
+    try {
+      const processElement = document.getElementById('topProcessesChart');
+      if (processElement) {
+        const processCtx = processElement.getContext('2d');
+        const processChart = new Chart(processCtx, {
       type: 'bar',
       data: {
         labels: processLabels,
@@ -162,15 +166,24 @@ export function generateDashboardHtml(metrics) {
           }
         }
       }
-    });
+      });
+      } else {
+        console.log('Process chart element not found in DOM');
+      }
+    } catch (err) {
+      console.error('Error initializing process chart:', err.message);
+    }
     
     // Action chart
     const actionLabels = ${JSON.stringify(Object.keys(metrics.actionCounts).slice(0, 5))};        
     const actionData = ${JSON.stringify(Object.keys(metrics.actionCounts).slice(0, 5)
       .map(action => metrics.actionCounts[action]))};        
     
-    const actionCtx = document.getElementById('actionsChart').getContext('2d');
-    const actionChart = new Chart(actionCtx, {
+    try {
+      const actionElement = document.getElementById('actionsChart');
+      if (actionElement) {
+        const actionCtx = actionElement.getContext('2d');
+        const actionChart = new Chart(actionCtx, {
       type: 'pie',
       data: {
         labels: actionLabels,
@@ -197,10 +210,17 @@ export function generateDashboardHtml(metrics) {
         responsive: true,
         maintainAspectRatio: false
       }
-    });
+      });
+      } else {
+        console.log('Action chart element not found in DOM');
+      }
+    } catch (err) {
+      console.error('Error initializing action chart:', err.message);
+    }
     
-    // Initialize mini charts for process details
-    document.querySelectorAll('.mini-chart').forEach(chartElem => {
+    // Initialize mini charts for process details with error handling
+    try {
+      document.querySelectorAll('.mini-chart').forEach(chartElem => {
       const processId = chartElem.dataset.processId;
       const timeLabels = JSON.parse(chartElem.dataset.timeLabels);
       const values = JSON.parse(chartElem.dataset.values);
@@ -236,21 +256,36 @@ export function generateDashboardHtml(metrics) {
           }
         }
       });
-    });
-    
-    // Tab switching
-    document.querySelectorAll('.tab').forEach(tab => {
-      tab.addEventListener('click', () => {
-        // Deactivate all tabs and hide content
-        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-        document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-        
-        // Activate clicked tab
-        tab.classList.add('active');
-        document.getElementById(tab.dataset.tab + '-tab').classList.add('active');
       });
-    });
-
+    } catch (err) {
+      console.error('Error initializing mini charts:', err.message);
+    }
+    
+    // Tab switching with error handling
+    try {
+      document.querySelectorAll('.tab').forEach(tab => {
+        tab.addEventListener('click', () => {
+          // Deactivate all tabs and hide content
+          document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+          document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+          
+          // Activate the clicked tab and its content
+          tab.classList.add('active');
+          const tabContentElement = document.getElementById(tab.dataset.tab);
+          if (tabContentElement) {
+            tabContentElement.classList.add('active');
+          } else {
+            console.error('Tab content element not found for tab:', tab.dataset.tab);
+          }
+        });
+      });
+    } catch (err) {
+      console.error('Error setting up tab switching:', err.message);
+    }
+    
+    // We'll use the filter script from metricsTables.js instead of duplicating here
+    // This avoids conflicts with multiple event handlers
+    // Add back the filter and refresh scripts
     ${getFilterScript()}
     
     ${getRefreshControlsScript()}
@@ -285,10 +320,10 @@ export function generateDashboardHtml(metrics) {
       ${statsOverview}
       
       <div class="tabs">
-        <div class="tab active" data-tab="requests">Recent Requests</div>
-        <div class="tab" data-tab="processes">Process Metrics</div>
-        <div class="tab" data-tab="actions">Action Metrics</div>
-        <div class="tab" data-tab="clients">Client Metrics</div>
+        <div class="tab active" data-tab="requests-tab">Recent Requests</div>
+        <div class="tab" data-tab="processes-tab">Process Metrics</div>
+        <div class="tab" data-tab="actions-tab">Action Metrics</div>
+        <div class="tab" data-tab="clients-tab">Client Metrics</div>
       </div>
       
       <div class="tab-content active" id="requests-tab">

@@ -194,24 +194,15 @@ export function generateRecentRequestsTable(recentRequests, requestDetails) {
     `;
     
     return `
-      <tr class="request-row" data-request-type="${requestType}">
-        <td>${formattedTimestamp}</td>
-        <td>
-          <details>
-            <summary>${(req.process_id || req.processId || '').substring(0, 12)}...</summary>
-            <div class="process-details">
-              ${detailsHtml}
-            </div>
-          </details>
-        </td>
-        <td><span class="request-type ${requestType}">${requestType}</span></td>
+      <tr class="request-row" data-request-type="${requestType}" onclick="toggleDetails(${index})">
+        <td>${formatTimestamp(req.timestamp || req.created_at)}</td>
+        <td title="${req.processId}">${req.processId.substring(0, 8)}...</td>
+        <td><span class="badge badge-${requestType === 'dry-run' ? 'warning' : requestType === 'result' ? 'success' : 'secondary'}">${requestType}</span></td>
         <td>${req.action || 'N/A'}</td>
-        <td>${req.request_ip || req.ip || 'N/A'}</td>
-        <td>${req.duration || '0'}ms</td>
+        <td>${req.ip || 'N/A'}</td>
+        <td>${req.duration ? req.duration + 'ms' : 'N/A'}</td>
         <td>
-          <button class="copy-btn" data-id="${req.process_id || req.processId}" title="Copy Process ID">
-            Copy ID
-          </button>
+          <button class="btn-toggle" onclick="toggleDetails(${index}); event.stopPropagation();">Toggle Details</button>
         </td>
       </tr>
     `;
