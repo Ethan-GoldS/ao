@@ -80,33 +80,79 @@ export async function storeMetrics(details) {
       }
     }
 
-    // Check if table has request_raw column before inserting
-    const result = await query(
-      `INSERT INTO metrics_requests (
-        process_id, request_ip, request_referrer, request_method, 
-        request_path, request_user_agent, request_origin, request_content_type,
-        request_body, request_raw, response_body, action, message_id, duration, time_received, time_completed
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
-      RETURNING id`,
-      [
-        processId,
-        ip || 'unknown',
-        referer || 'unknown',
-        method || 'unknown',
-        path || 'unknown',
-        userAgent || 'unknown',
-        origin || 'unknown',
-        contentType || 'unknown',
-        parsedBody ? JSON.stringify(parsedBody) : null,
-        rawBodyForStorage, // Use prepared raw body value
-        responseBodyForStorage, // Add response body
-        action || 'unknown',
-        messageId || null, // Add message ID
-        duration || 0,
-        timeReceived ? new Date(timeReceived) : new Date(),
-        timeCompleted ? new Date(timeCompleted) : new Date()
-      ]
-    )
+    // Try to determine if the message_id column exists
+    let hasMessageIdColumn = true;
+    try {
+      const columnCheck = await query(
+        `SELECT column_name FROM information_schema.columns 
+         WHERE table_name = 'metrics_requests' AND column_name = 'message_id'`
+      );
+      hasMessageIdColumn = columnCheck.rows.length > 0;
+      _logger('message_id column exists: %s', hasMessageIdColumn);
+    } catch (error) {
+      _logger('Error checking for message_id column: %O', error);
+      hasMessageIdColumn = false;
+    }
+    
+    // Use the appropriate insert statement based on column existence
+    let result;
+    if (hasMessageIdColumn) {
+      // Insert with message_id column
+      result = await query(
+        `INSERT INTO metrics_requests (
+          process_id, request_ip, request_referrer, request_method, 
+          request_path, request_user_agent, request_origin, request_content_type,
+          request_body, request_raw, response_body, action, message_id, duration, time_received, time_completed
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+        RETURNING id`,
+        [
+          processId,
+          ip || 'unknown',
+          referer || 'unknown',
+          method || 'unknown',
+          path || 'unknown',
+          userAgent || 'unknown',
+          origin || 'unknown',
+          contentType || 'unknown',
+          parsedBody ? JSON.stringify(parsedBody) : null,
+          rawBodyForStorage,
+          responseBodyForStorage,
+          action || 'unknown',
+          messageId || null,
+          duration || 0,
+          timeReceived ? new Date(timeReceived) : new Date(),
+          timeCompleted ? new Date(timeCompleted) : new Date()
+        ]
+      );
+    } else {
+      // Insert without message_id column
+      result = await query(
+        `INSERT INTO metrics_requests (
+          process_id, request_ip, request_referrer, request_method, 
+          request_path, request_user_agent, request_origin, request_content_type,
+          request_body, request_raw, response_body, action, duration, time_received, time_completed
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+        RETURNING id`,
+        [
+          processId,
+          ip || 'unknown',
+          referer || 'unknown',
+          method || 'unknown',
+          path || 'unknown',
+          userAgent || 'unknown',
+          origin || 'unknown',
+          contentType || 'unknown',
+          parsedBody ? JSON.stringify(parsedBody) : null,
+          rawBodyForStorage, // Use prepared raw body value
+          responseBodyForStorage, // Add response body
+          action || 'unknown',
+          // Note: messageId removed from this query since the column doesn't exist
+          duration || 0,
+          timeReceived ? new Date(timeReceived) : new Date(),
+          timeCompleted ? new Date(timeCompleted) : new Date()
+        ]
+      );
+    }
 
     const id = result.rows[0]?.id
     _logger('Successfully stored metrics for process %s with ID %d', processId, id)
