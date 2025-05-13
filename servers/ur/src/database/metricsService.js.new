@@ -6,6 +6,12 @@ import { query } from './db.js'
 import { logger } from '../logger.js'
 
 const _logger = logger.child('metricsService')
+
+/**
+ * Store request metrics in the database
+ * @param {Object} details Request details object
+ * @returns {Promise<boolean>} Success status
+ */
 export async function storeMetrics(details) {
   try {
     if (!details || !details.processId) {
@@ -24,7 +30,7 @@ export async function storeMetrics(details) {
       contentType,
       requestBody,
       rawBody,
-      responseBody, // Add response body handling
+      responseBody,
       action,
       duration,
       timeReceived,
@@ -91,8 +97,8 @@ export async function storeMetrics(details) {
         origin || 'unknown',
         contentType || 'unknown',
         parsedBody ? JSON.stringify(parsedBody) : null,
-        rawBodyForStorage, // Use prepared raw body value
-        responseBodyForStorage, // Add response body
+        rawBodyForStorage,
+        responseBodyForStorage,
         action || 'unknown',
         duration || 0,
         timeReceived ? new Date(timeReceived) : new Date(),
@@ -138,7 +144,6 @@ export async function getRecentRequests(limit = 100) {
       [limit]
     );
     
-    // If query fails with the time_received column, try with timestamp for backward compatibility
     return result.rows.map(row => ({
       id: row.id,
       process_id: row.process_id,
@@ -196,7 +201,7 @@ export async function getProcessMetrics() {
       processId: row.process_id,
       requestCount: parseInt(row.request_count, 10),
       avgDuration: parseFloat(row.avg_duration) || 0,
-      lastRequest: row.last_request
+      lastRequest: row.last_request ? row.last_request.toISOString() : null
     }))
   } catch (error) {
     _logger('Error getting process metrics: %O', error)
@@ -210,21 +215,22 @@ export async function getProcessMetrics() {
  */
 export async function getActionMetrics() {
   try {
-    const result = await query(
+    const actionResult = await query(
       `SELECT 
          action,
          COUNT(*) as request_count,
-         AVG(duration) as avg_duration
+         AVG(duration) as avg_duration,
+         MAX(time_received) as last_request
        FROM metrics_requests
-       WHERE action IS NOT NULL AND action != 'unknown'
        GROUP BY action
        ORDER BY request_count DESC`
     )
 
-    return result.rows.map(row => ({
+    return actionResult.rows.map(row => ({
       action: row.action,
       requestCount: parseInt(row.request_count, 10),
-      avgDuration: parseFloat(row.avg_duration) || 0
+      avgDuration: parseFloat(row.avg_duration) || 0,
+      lastRequest: row.last_request ? row.last_request.toISOString() : null
     }))
   } catch (error) {
     _logger('Error getting action metrics: %O', error)
@@ -238,44 +244,70 @@ export async function getActionMetrics() {
  */
 export async function getClientMetrics() {
   try {
-    // Get IP metrics
+    // Get IP address counts
     const ipResult = await query(
       `SELECT 
          request_ip as ip,
          COUNT(*) as request_count
        FROM metrics_requests
-       WHERE request_ip != 'unknown'
        GROUP BY request_ip
        ORDER BY request_count DESC
-       LIMIT 20`
+       LIMIT 10`
     )
 
-    // Get referrer metrics
+    // Get referrer counts
     const referrerResult = await query(
       `SELECT 
          request_referrer as referrer,
          COUNT(*) as request_count
        FROM metrics_requests
-       WHERE request_referrer != 'unknown'
        GROUP BY request_referrer
        ORDER BY request_count DESC
-       LIMIT 20`
+       LIMIT 10`
     )
 
+    const ipAddresses = ipResult.rows.map(row => ({
+      ip: row.ip,
+      requestCount: parseInt(row.request_count, 10)
+    }))
+
+    const referers = referrerResult.rows.map(row => ({
+      referrer: row.referrer,
+      requestCount: parseInt(row.request_count, 10)
+    }))
+
     return {
-      ipCounts: ipResult.rows.map(row => [
-        row.ip,
-        parseInt(row.request_count, 10)
-      ]),
-      referrerCounts: referrerResult.rows.map(row => [
-        row.referrer,
-        parseInt(row.request_count, 10)
-      ])
+      ipAddresses,
+      referers
     }
   } catch (error) {
     _logger('Error getting client metrics: %O', error)
-    return { ipCounts: [], referrerCounts: [] }
+    return {
+      ipAddresses: [],
+      referers: []
+    }
   }
+}
+
+/**
+ * Format date for time bucket display
+ * @param {Date} date Date to format
+ * @param {String} interval Interval type
+ * @returns {String} Formatted date string
+ */
+function formatDateForBucket(date, interval) {
+  if (interval === 'minute') {
+    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  } else if (interval === '5min' || interval === '10min' || interval === '15min' || interval === '30min') {
+    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  } else if (interval === 'hour') {
+    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  } else if (interval === 'day') {
+    return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+  }
+  
+  // Default format
+  return date.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
 /**
@@ -428,19 +460,114 @@ export async function getTimeSeriesData(hours = 24, interval = 'hour', startDate
 }
 
 /**
- * Format date for time bucket display
- * @param {Date} date Date to format
- * @param {String} interval Interval type
- * @returns {String} Formatted date string
+ * Process time series results into expected format
+ * @param {Object} result Query result
+ * @param {Number} hours Number of hours
+ * @param {String} interval Interval for data grouping
+ * @param {Date} startDate Optional start date for custom time ranges
+ * @param {Date} endDate Optional end date for custom time ranges
+ * @returns {Promise<Object>} Processed time series data
  */
-function formatDateForBucket(date, interval) {
-  if (interval === 'minute') {
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  } else if (interval === '5min' || interval === '10min' || interval === '15min' || interval === '30min') {
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  } else if (interval === 'hour') {
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  } else if (interval === 'day') {
+async function processTimeSeriesResults(result, hours, interval = 'hour', startDate = null, endDate = null) {
+  _logger('Processing time series results. Found %d buckets', result.rows.length);
+  
+  const timeSeriesData = [];
+  
+  if (result.rows.length > 0) {
+    for (const row of result.rows) {
+      timeSeriesData.push({
+        timestamp: row.time_bucket.toISOString(),
+        totalRequests: parseInt(row.total_requests, 10),
+        processCounts: row.process_counts || {}
+      });
+    }
+  } else {
+    // No data in the results, create empty buckets
+    _logger('No time series data found, creating empty buckets');
+    const now = new Date();
+    const startTime = startDate ? new Date(startDate) : new Date(now.getTime() - hours * 60 * 60 * 1000);
+    const endTime = endDate ? new Date(endDate) : now;
+    
+    // Determine interval in milliseconds
+    let intervalMs;
+    switch(interval) {
+      case 'minute': intervalMs = 60 * 1000; break;
+      case '5min': intervalMs = 5 * 60 * 1000; break;
+      case '10min': intervalMs = 10 * 60 * 1000; break;
+      case '15min': intervalMs = 15 * 60 * 1000; break;
+      case '30min': intervalMs = 30 * 60 * 1000; break;
+      case 'hour': intervalMs = 60 * 60 * 1000; break;
+      case 'day': intervalMs = 24 * 60 * 60 * 1000; break;
+      default: intervalMs = 60 * 60 * 1000; // Default to hourly
+    }
+    
+    // Generate appropriate number of empty buckets
+    const duration = endTime.getTime() - startTime.getTime();
+    const numBuckets = Math.ceil(duration / intervalMs);
+    
+    for (let i = 0; i < numBuckets; i++) {
+      const bucketTime = new Date(startTime.getTime() + i * intervalMs);
+      timeSeriesData.push({
+        timestamp: bucketTime.toISOString(),
+        totalRequests: 0,
+        processCounts: {}
+      });
+    }
+  }
+  
+  // Sort by timestamp ascending (oldest first)
+  timeSeriesData.sort((a, b) => 
+    new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+  );
+  
+  // Create time labels for Chart.js based on the interval
+  const timeLabels = timeSeriesData.map(d => {
+    const date = new Date(d.timestamp);
+    return formatDateForBucket(date, interval);
+  });
+  
+  _logger('Processed time series data with %d buckets', timeSeriesData.length);
+  
+  return { timeSeriesData, timeLabels };
+}
+
+/**
+ * Get total statistics
+ * @returns {Promise<Object>} Total statistics
+ */
+export async function getTotalStats() {
+  try {
+    const result = await query(
+      `SELECT 
+         COUNT(*) as total_requests,
+         COUNT(DISTINCT process_id) as unique_processes,
+         COUNT(DISTINCT request_ip) as unique_ips,
+         MIN(time_received) as start_time,
+         AVG(duration) as avg_duration
+       FROM metrics_requests`
+    );
+
+    const row = result.rows[0];
+    return {
+      totalRequests: parseInt(row.total_requests, 10),
+      uniqueProcesses: parseInt(row.unique_processes, 10),
+      uniqueIps: parseInt(row.unique_ips, 10),
+      avgDuration: parseFloat(row.avg_duration) || 0,
+      startTime: row.start_time ? row.start_time.toISOString() : new Date().toISOString()
+    };
+  } catch (error) {
+    _logger('Error getting total stats: %O', error);
+    return {
+      totalRequests: 0,
+      uniqueProcesses: 0,
+      uniqueIps: 0,
+      avgDuration: 0,
+      startTime: new Date().toISOString()
+    };
+  }
+}
+
+/**
  * Get all metrics for dashboard display
  * @param {Object} options Optional filtering parameters
  * @returns {Promise<Object>} All metrics
@@ -484,33 +611,21 @@ export async function getAllMetrics(options = {}) {
       clients,
       timeData
     };
-      timeSeriesData,
-      timeLabels,
-      topProcessIds,
-      totalRequests: totals.totalRequests,
-      uniqueProcesses: totals.uniqueProcesses,
-      uniqueIps: totals.uniqueIps,
-      startTime: totals.startTime
-    }
   } catch (error) {
-    _logger('Error getting all metrics: %O', error)
+    _logger('Error getting all metrics: %O', error);
+    
+    // Return partial data or empty objects on error
     return {
+      stats: { totalRequests: 0, avgDuration: 0 },
       recentRequests: [],
-      requestDetails: {},
-      processCounts: {},
-      processTiming: {},
-      actionCounts: {},
-      actionTiming: {},
-      ipCounts: [],
-      referrerCounts: [],
-      timeSeriesData: [],
-      timeLabels: [],
-      topProcessIds: [],
-      totalRequests: 0,
-      uniqueProcesses: 0,
-      uniqueIps: 0,
-      startTime: new Date().toISOString()
-    }
+      processes: [],
+      actions: [],
+      clients: { ipAddresses: [], referers: [] },
+      timeData: {
+        timeSeriesData: [],
+        timeLabels: []
+      }
+    };
   }
 }
 
@@ -520,7 +635,7 @@ export async function getAllMetrics(options = {}) {
  * @returns {Date} Date truncated to hour
  */
 function date_trunc_hour(date) {
-  const result = new Date(date)
-  result.setMinutes(0, 0, 0)
-  return result
+  const truncated = new Date(date);
+  truncated.setMinutes(0, 0, 0);
+  return truncated;
 }
