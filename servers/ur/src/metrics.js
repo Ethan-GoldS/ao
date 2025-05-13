@@ -7,7 +7,9 @@
 import { logger } from './logger.js'
 import { config } from './config.js'
 import { initializeDatabase } from './database/db.js'
-import { storeMetrics, getAllMetrics } from './database/metricsService.js'
+// Use the new metricsServiceV2 with improved structure for dry runs and results with messageID tracking
+import * as legacyMetricsService from './database/metricsService.js'
+import * as metricsServiceV2 from './database/metricsServiceV2.js'
 
 const _logger = logger.child('metrics')
 
@@ -116,21 +118,16 @@ export function recordRequestDetails(details) {
     );
   }
   
-  // Store metrics in PostgreSQL database
-  storeMetrics(details)
-    .then(success => {
-      if (success) {
-        _logger('Metrics stored successfully for process %s (duration: %dms)', 
-          details.processId, 
-          details.duration || 0
-        );
-      } else {
-        _logger('Failed to store metrics for process %s', details.processId);
-      }
-    })
-    .catch(err => {
-      _logger('Error storing metrics: %O', err);
+  // Store metrics in PostgreSQL database using the new structure
+  // First try the new V2 service
+  metricsServiceV2.storeMetrics(details).catch(err => {
+    _logger('Error storing metrics in PostgreSQL V2: %O', err);
+    
+    // Fall back to legacy service if V2 fails
+    legacyMetricsService.storeMetrics(details).catch(legacyErr => {
+      _logger('Error storing metrics in legacy PostgreSQL: %O', legacyErr);
     });
+  });
 }
 
 /**
@@ -230,24 +227,35 @@ export function finishTracking(tracking, action) {
  */
 export async function getMetrics() {
   try {
-    // Use the PostgreSQL metrics service to fetch all metrics
-    return await getAllMetrics();
+    // Use new metricsServiceV2 to get metrics
+    const metrics = await metricsServiceV2.getAllMetrics();
+    return metrics;
   } catch (err) {
-    _logger('Error getting metrics: %O', err);
-    return {
-      recentRequests: [],
-      requestDetails: {},
-      processCounts: {},
-      processTiming: {},
-      actionCounts: {},
-      actionTiming: {},
-      ipCounts: [],
-      referrerCounts: [],
-      timeSeriesData: [],
-      timeLabels: [],
-      topProcessIds: [],
-      totalRequests: 0,
-      startTime: new Date().toISOString()
-    };
+    _logger('Error getting metrics from V2 service: %O', err);
+    
+    try {
+      // Fall back to legacy metrics service
+      _logger('Falling back to legacy metrics service');
+      const legacyMetrics = await legacyMetricsService.getAllMetrics();
+      return legacyMetrics;
+    } catch (legacyErr) {
+      _logger('Error getting metrics from legacy service: %O', legacyErr);
+      return {
+        totalRequests: 0,
+        dryRunCount: 0,
+        resultCount: 0,
+        processCount: 0,
+        uniqueDryRuns: 0,
+        uniqueResults: 0,
+        uniqueMessageIds: 0,
+        processCounts: {},
+        actionCounts: {},
+        messageIdCounts: {},
+        ipCounts: [],
+        referrerCounts: [],
+        timeSeriesData: [],
+        recentRequests: []
+      };
+    }
   }
 }

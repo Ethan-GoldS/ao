@@ -50,6 +50,13 @@ export function getDashboardStyles() {
       flex-wrap: wrap;
       margin-bottom: 20px;
     }
+    
+    .stat-section {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin-right: 10px;
+    }
     .stat-box {
       flex: 1;
       min-width: 200px;

@@ -7,7 +7,6 @@ import {
   generateRecentRequestsTable, 
   generateProcessMetricsTable, 
   generateActionMetricsTable,
-  generateMessageIdMetricsTable,
   generateClientMetricsTable,
   getFilterScript 
 } from './metricsTables.js';
@@ -53,7 +52,6 @@ export function generateDashboardHtml(metrics) {
   const recentRequestsTable = generateRecentRequestsTable(metrics.recentRequests, metrics.requestDetails);
   const processMetricsTable = generateProcessMetricsTable(metrics);
   const actionMetricsTable = generateActionMetricsTable(metrics);
-  const messageIdMetricsTable = generateMessageIdMetricsTable(metrics);
   const clientMetricsTable = generateClientMetricsTable(metrics);
   
   // Generate the overview stats
@@ -64,16 +62,28 @@ export function generateDashboardHtml(metrics) {
         <div class="stat-label">Total Requests</div>
       </div>
       <div class="stat-box">
-        <div class="stat-number">${Object.keys(metrics.processCounts).length}</div>
+        <div class="stat-number">${metrics.processCount || Object.keys(metrics.processCounts).length}</div>
         <div class="stat-label">Unique Process IDs</div>
       </div>
-      <div class="stat-box">
-        <div class="stat-number">${Object.keys(metrics.actionCounts).length}</div>
-        <div class="stat-label">Different Actions</div>
+      <div class="stat-section">
+        <div class="stat-box dry-run-stat">
+          <div class="stat-number">${metrics.dryRunCount || 0}</div>
+          <div class="stat-label">Dry Run Requests</div>
+        </div>
+        <div class="stat-box result-stat">
+          <div class="stat-number">${metrics.resultCount || 0}</div>
+          <div class="stat-label">Result Requests</div>
+        </div>
       </div>
-      <div class="stat-box">
-        <div class="stat-number">${Object.keys(metrics.messageIdCounts || {}).length}</div>
-        <div class="stat-label">Unique Message IDs</div>
+      <div class="stat-section">
+        <div class="stat-box unique-stat">
+          <div class="stat-number">${metrics.uniqueDryRuns || Object.keys(metrics.actionCounts).length}</div>
+          <div class="stat-label">Unique Actions</div>
+        </div>
+        <div class="stat-box unique-message-stat">
+          <div class="stat-number">${metrics.uniqueMessageIds || 0}</div>
+          <div class="stat-label">Unique Message IDs</div>
+        </div>
       </div>
       <div class="stat-box">
         <div class="stat-number">${metrics.ipCounts.length}</div>
@@ -248,46 +258,24 @@ export function generateDashboardHtml(metrics) {
       
       <div class="tabs">
         <div class="tab active" data-tab="requests">Recent Requests</div>
-        <div class="tab" data-tab="traffic">Traffic Overview</div>
         <div class="tab" data-tab="processes">Process Metrics</div>
         <div class="tab" data-tab="actions">Action Metrics</div>
-        <div class="tab" data-tab="messages">Message IDs</div>
         <div class="tab" data-tab="clients">Client Metrics</div>
       </div>
-
+      
       <div class="tab-content active" id="requests-tab">
-        ${refreshControls}
-        <h2>Recent Requests</h2>
         ${recentRequestsTable}
       </div>
-
-      <div class="tab-content" id="traffic-tab">
-        ${refreshControls}
-        <h2>Traffic Overview</h2>
-        ${trafficOverview}
-      </div>
-
+      
       <div class="tab-content" id="processes-tab">
-        ${refreshControls}
-        <h2>Process Metrics</h2>
         ${processMetricsTable}
       </div>
-
+      
       <div class="tab-content" id="actions-tab">
-        ${refreshControls}
-        <h2>Action Metrics</h2>
         ${actionMetricsTable}
       </div>
-
-      <div class="tab-content" id="messages-tab">
-        ${refreshControls}
-        <h2>Message ID Metrics</h2>
-        ${messageIdMetricsTable}
-      </div>
-
+      
       <div class="tab-content" id="clients-tab">
-        ${refreshControls}
-        <h2>Client Metrics</h2>
         ${clientMetricsTable}
       </div>
       

@@ -160,6 +160,11 @@ export async function initializeDatabase() {
     const { runMigrations } = await import('./migration.js')
     await runMigrations()
     
+    // Run schema migration to create new tables for dry runs and results
+    _logger('Running schema migrations for new table structure...')
+    const { runSchemaMigration } = await import('./schema_migration.js')
+    await runSchemaMigration()
+    
     _logger('Database initialization complete')
     return true
   } catch (error) {
