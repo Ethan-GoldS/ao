@@ -57,6 +57,36 @@ export function getDashboardStyles() {
       gap: 10px;
       margin-right: 10px;
     }
+    
+    .section-title {
+      margin-top: 20px;
+      margin-bottom: 10px;
+      font-size: 1.2em;
+      color: #333;
+      font-weight: bold;
+      border-bottom: 1px solid #ddd;
+      padding-bottom: 5px;
+    }
+    
+    .table-container {
+      max-height: 400px;
+      overflow-y: auto;
+      margin-bottom: 20px;
+      border: 1px solid #eee;
+      border-radius: 4px;
+    }
+    
+    .message-id-row td {
+      font-family: monospace;
+      font-size: 0.9em;
+    }
+    
+    .no-data {
+      text-align: center;
+      font-style: italic;
+      color: #777;
+      padding: 20px;
+    }
     .stat-box {
       flex: 1;
       min-width: 200px;

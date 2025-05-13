@@ -249,16 +249,55 @@ export function generateRecentRequestsTable(recentRequests, requestDetails) {
 }
 
 export function generateProcessMetricsTable(metrics) {
-  const processMetricsHtml = Object.entries(metrics.processCounts)
+  // Safely get process counts
+  const processCounts = metrics.processCounts || {};
+  
+  // Safety check to avoid error if processCounts is empty
+  if (Object.keys(processCounts).length === 0) {
+    return `
+      <div class="table-container">
+        <table id="processMetricsTable">
+          <thead>
+            <tr>
+              <th>Process ID</th>
+              <th>Requests</th>
+              <th>Avg Duration</th>
+              <th>Activity</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td colspan="4" class="no-data">No process data available</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    `;
+  }
+  
+  const processMetricsHtml = Object.entries(processCounts)
     .sort((a, b) => b[1] - a[1]) // Sort by count descending
     .map(([processId, count]) => {
-      const timing = metrics.processTiming[processId] || { avgDuration: 0 };
-      const isTopProcess = metrics.topProcessIds.includes(processId);
+      const timing = metrics.processTiming?.[processId] || { avgDuration: 0 };
+      const isTopProcess = metrics.topProcessIds?.includes(processId) || false;
       
-      // Create process-specific time series data
-      const processTimeData = metrics.timeSeriesData.map(bucket => 
-        bucket.processCounts[processId] || 0
-      );
+      // Create process-specific time series data - handle both formats
+      let processTimeData = [];
+      
+      // Check if we have per-process time series data
+      if (Array.isArray(metrics.timeSeriesData) && metrics.timeSeriesData.length > 0) {
+        // Check if the time series data has processCounts for each bucket
+        if (metrics.timeSeriesData[0].processCounts) {
+          // Old format with processCounts per bucket
+          processTimeData = metrics.timeSeriesData.map(bucket => 
+            bucket.processCounts?.[processId] || 0
+          );
+        } else {
+          // New format or format without processCounts
+          // Just use empty array, we don't have per-process data
+          processTimeData = Array(metrics.timeLabels?.length || 0).fill(0);
+        }
+      }
       
       return `
         <tr>
@@ -309,60 +348,158 @@ export function generateProcessMetricsTable(metrics) {
 }
 
 export function generateActionMetricsTable(metrics) {
-  const actionMetricsHtml = Object.entries(metrics.actionCounts)
+  // Safely get action counts
+  const actionCounts = metrics.actionCounts || {};
+  const messageIdCounts = metrics.messageIdCounts || {};
+  
+  // Safety check to avoid error if actionCounts is empty
+  if (Object.keys(actionCounts).length === 0) {
+    return `
+      <div class="table-container">
+        <table id="actionMetricsTable">
+          <thead>
+            <tr>
+              <th>Action</th>
+              <th>Count</th>
+              <th>Avg Duration</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td colspan="3" class="no-data">No action data available</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    `;
+  }
+  
+  // Format the top actions
+  const actionMetricsHtml = Object.entries(actionCounts)
     .sort((a, b) => b[1] - a[1]) // Sort by count descending
+    .slice(0, 20) // Limit to top 20 actions
     .map(([action, count]) => {
-      const timing = metrics.actionTiming[action] || { avgDuration: 0 };
+      const timing = metrics.actionTiming?.[action] || { avgDuration: 0 };
+      
       return `
-        <tr class="action-row" data-action="${action}">
+        <tr class="action-row">
           <td>${action}</td>
           <td>${count}</td>
-          <td>${timing.avgDuration.toFixed(2)}ms</td>
+          <td>${timing.avgDuration}ms</td>
         </tr>
       `;
     }).join('');
+    
+  // If we have message IDs, format them too in a separate section
+  let messageIdHtml = '';
+  if (Object.keys(messageIdCounts).length > 0) {
+    messageIdHtml = `
+      <h4 class="section-title">Message IDs</h4>
+      <div class="table-container">
+        <table id="messageIdTable">
+          <thead>
+            <tr>
+              <th>Message ID</th>
+              <th>Count</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${Object.entries(messageIdCounts)
+              .sort((a, b) => b[1] - a[1]) // Sort by count descending
+              .slice(0, 20) // Limit to top 20 message IDs
+              .map(([messageId, count]) => `
+                <tr class="message-id-row">
+                  <td>${messageId}</td>
+                  <td>${count}</td>
+                </tr>
+              `).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
+  }
 
   return `
     <div class="filter-group">
-      <input type="text" class="filter-input" id="actionFilter" placeholder="Filter by action..." />
+      <input type="text" class="filter-input" id="actionFilter" placeholder="Filter actions..." />
     </div>
-    <table>
-      <thead>
-        <tr>
-          <th>Action</th>
-          <th>Request Count</th>
-          <th>Average Duration</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${actionMetricsHtml || '<tr><td colspan="3">No action metrics recorded yet</td></tr>'}
-      </tbody>
-    </table>
-    <div class="chart-container">
-      <h3>Actions by Request Count</h3>
-      <canvas id="actionsChart"></canvas>
+    <h4 class="section-title">Actions</h4>
+    <div class="table-container">
+      <table id="actionMetricsTable">
+        <thead>
+          <tr>
+            <th>Action</th>
+            <th>Count</th>
+            <th>Avg Duration</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${actionMetricsHtml}
+        </tbody>
+      </table>
     </div>
+    ${messageIdHtml}
   `;
 }
 
 export function generateClientMetricsTable(metrics) {
+  // Safely get IP counts
+  const ipCounts = metrics.ipCounts || [];
+  
+  // Safety check to avoid error if ipCounts is empty
+  if (ipCounts.length === 0) {
+    return `
+      <div class="table-container">
+        <table id="clientMetricsTable">
+          <thead>
+            <tr>
+              <th>IP Address</th>
+              <th>Request Count</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td colspan="2" class="no-data">No client data available</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    `;
+  }
+  
   // Generate IP address metrics
-  const ipMetricsHtml = metrics.ipCounts
-    .map(([ip, count]) => `
-      <tr>
-        <td>${ip}</td>
-        <td>${count}</td>
-      </tr>
-    `).join('');
+  const ipMetricsHtml = ipCounts
+    .slice(0, 20) // Limit to top 20 IPs
+    .map(ipData => {
+      // Handle both formats: object with ip/count properties or simple object
+      const ip = ipData.ip || Object.keys(ipData)[0] || 'Unknown';
+      const count = ipData.count || ipData[ip] || 0;
+      
+      return `
+        <tr>
+          <td>${ip}</td>
+          <td>${count}</td>
+        </tr>
+      `;
+    }).join('');
     
   // Generate referrer metrics
-  const referrerMetricsHtml = metrics.referrerCounts
-    .map(([referrer, count]) => `
-      <tr>
-        <td>${referrer}</td>
-        <td>${count}</td>
-      </tr>
-    `).join('');
+  const referrerCounts = metrics.referrerCounts || [];
+  const referrerMetricsHtml = referrerCounts
+    .slice(0, 20) // Limit to top 20 referrers
+    .map(refData => {
+      // Handle both formats: object with referrer/count properties or simple object
+      const referrer = refData.referrer || Object.keys(refData)[0] || 'Unknown';
+      const count = refData.count || refData[referrer] || 0;
+      const displayReferrer = referrer === 'null' || referrer === 'undefined' || referrer === 'unknown' ? 'None' : referrer;
+      
+      return `
+        <tr>
+          <td>${displayReferrer}</td>
+          <td>${count}</td>
+        </tr>
+      `;
+    }).join('');
 
   return `
     <div class="card">
