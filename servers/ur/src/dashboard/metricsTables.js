@@ -62,12 +62,32 @@ function formatJsonForDisplay(jsonObj) {
   }
 }
 
+/**
+ * Determine the request type based on URL patterns
+ * @param {object} req - The request object
+ * @returns {string} Request type: 'dry-run', 'result', or 'unknown'
+ */
+function determineRequestType(req) {
+  const url = req.request_path || req.url || '';
+  
+  if (url.includes('/dry-run')) {
+    return 'dry-run';
+  } else if (url.includes('/result/')) {
+    return 'result';
+  } else {
+    return 'unknown';
+  }
+}
+
 export function generateRecentRequestsTable(recentRequests, requestDetails) {
   // Generate recent requests table with dropdowns for details
   const recentRequestsHtml = recentRequests.map((req, index) => {
     // Try to get request details for this process ID
     const details = requestDetails[req.processId] || [];
     const detail = details.length > 0 ? details[0] : null;
+    
+    // Determine request type
+    const requestType = determineRequestType(req);
     
     // Extract the actual request body from the JSONB column if available
     let requestBodyHtml = 'No body data';
@@ -174,7 +194,7 @@ export function generateRecentRequestsTable(recentRequests, requestDetails) {
     `;
     
     return `
-      <tr>
+      <tr class="request-row" data-request-type="${requestType}">
         <td>${formattedTimestamp}</td>
         <td>
           <details>
@@ -184,6 +204,7 @@ export function generateRecentRequestsTable(recentRequests, requestDetails) {
             </div>
           </details>
         </td>
+        <td><span class="request-type ${requestType}">${requestType}</span></td>
         <td>${req.action || 'N/A'}</td>
         <td>${req.request_ip || req.ip || 'N/A'}</td>
         <td>${req.duration || '0'}ms</td>
@@ -198,13 +219,22 @@ export function generateRecentRequestsTable(recentRequests, requestDetails) {
 
   return `
     <div class="filter-group">
+      <div class="type-toggle-container">
+        <div class="type-toggle">
+          <button class="type-filter-btn active" data-filter="all">All</button>
+          <button class="type-filter-btn" data-filter="dry-run">Dry Run</button>
+          <button class="type-filter-btn" data-filter="result">Result</button>
+          <button class="type-filter-btn" data-filter="unknown">Unknown</button>
+        </div>
+      </div>
       <input type="text" class="filter-input" id="requestFilter" placeholder="Filter requests..." />
     </div>
-    <table>
+    <table id="recentRequestsTable">
       <thead>
         <tr>
           <th>Timestamp</th>
           <th>Process ID</th>
+          <th>Request Type</th>
           <th>Action</th>
           <th>IP</th>
           <th>Duration</th>
@@ -369,26 +399,65 @@ export function generateClientMetricsTable(metrics) {
 
 export function getFilterScript() {
   return `
-    // Filter functionality
-    document.getElementById('requestFilter').addEventListener('input', function() {
-      const filterValue = this.value.toLowerCase();
-      const rows = document.querySelectorAll('#requests-tab tbody tr');
+    // Filter table rows by input text
+    document.getElementById('requestFilter').addEventListener('input', function(e) {
+      const filterText = e.target.value.toLowerCase();
       
-      rows.forEach(row => {
-        const text = row.textContent.toLowerCase();
-        row.style.display = text.includes(filterValue) ? '' : 'none';
+      // Apply filter to all tables
+      applyTableFilter('recentRequestsTable', filterText);
+      applyTableFilter('processMetricsTable', filterText);
+      applyTableFilter('actionMetricsTable', filterText);
+      applyTableFilter('clientMetricsTable', filterText);
+    });
+    
+    // Request type filter toggle
+    const typeFilterButtons = document.querySelectorAll('.type-filter-btn');
+    typeFilterButtons.forEach(button => {
+      button.addEventListener('click', function() {
+        // Remove active class from all buttons
+        typeFilterButtons.forEach(btn => btn.classList.remove('active'));
+        
+        // Add active class to clicked button
+        this.classList.add('active');
+        
+        // Get the filter type
+        const filterType = this.dataset.filter;
+        
+        // Apply filter to the table
+        const rows = document.querySelectorAll('#recentRequestsTable tbody tr.request-row');
+        rows.forEach(row => {
+          if (filterType === 'all') {
+            row.style.display = '';
+          } else {
+            row.style.display = row.dataset.requestType === filterType ? '' : 'none';
+          }
+        });
       });
     });
     
-    document.getElementById('processFilter').addEventListener('input', function() {
-      const filterValue = this.value.toLowerCase();
-      const rows = document.querySelectorAll('#processes-tab tbody tr');
+    function applyTableFilter(tableId, filterText) {
+      const table = document.getElementById(tableId);
+      if (!table) return;
+      
+      const rows = table.querySelectorAll('tbody tr');
       
       rows.forEach(row => {
-        const text = row.textContent.toLowerCase();
-        row.style.display = text.includes(filterValue) ? '' : 'none';
+        const textContent = row.textContent.toLowerCase();
+        if (textContent.includes(filterText)) {
+          // If we are also filtering by type, check the type filter
+          if (tableId === 'recentRequestsTable' && row.classList.contains('request-row')) {
+            const activeTypeFilter = document.querySelector('.type-filter-btn.active').dataset.filter;
+            if (activeTypeFilter !== 'all' && row.dataset.requestType !== activeTypeFilter) {
+              row.style.display = 'none';
+              return;
+            }
+          }
+          row.style.display = '';
+        } else {
+          row.style.display = 'none';
+        }
       });
-    });
+    };
     
     document.getElementById('actionFilter').addEventListener('input', function() {
       const filterValue = this.value.toLowerCase();
