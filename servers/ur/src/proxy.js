@@ -5,6 +5,9 @@ import { always, compose } from 'ramda'
  * was created with the fix
  */
 import httpProxy from 'http-proxy-node16'
+import https from 'https'
+import fs from 'fs'
+import path from 'path'
 
 /**
  * TODO: we could inject these, but just keeping simple for now
@@ -14,11 +17,40 @@ import { logger } from './logger.js'
 
 import { mountRoutesWithByAoUnit } from './routes/byAoUnit.js'
 
-export function proxyWith ({ aoUnit, hosts, surUrl, processToHost, ownerToHost }) {
+export function proxyWith ({ aoUnit, hosts, surUrl, processToHost, ownerToHost, tlsOptions, secureOptions }) {
   const _logger = logger.child('proxy')
   _logger('Configuring to reverse proxy ao %s units...', aoUnit)
 
-  const proxy = httpProxy.createProxyServer({})
+  // Default TLS options if not provided
+  const defaultTlsOptions = {
+    // If tlsOptions contains paths to cert/key files, load them
+    key: tlsOptions?.keyPath ? fs.readFileSync(tlsOptions.keyPath) : undefined,
+    cert: tlsOptions?.certPath ? fs.readFileSync(tlsOptions.certPath) : undefined,
+    ca: tlsOptions?.caPath ? fs.readFileSync(tlsOptions.caPath) : undefined,
+    // Direct content can also be provided instead of file paths
+    ...tlsOptions
+  }
+
+  // Default secure options for target validation
+  const defaultSecureOptions = {
+    rejectUnauthorized: true, // Validate certificates by default
+    ...secureOptions
+  }
+
+  // Create the proxy server with our TLS and secure options
+  const proxy = httpProxy.createProxyServer({
+    // Apply TLS options for re-encryption if provided
+    ...(Object.keys(defaultTlsOptions).some(k => defaultTlsOptions[k]) ? { ssl: defaultTlsOptions } : {}),
+    // Configure secure options for target validation
+    secure: defaultSecureOptions.rejectUnauthorized,
+    // Use a custom agent for HTTPS requests to apply more detailed TLS options
+    agent: new https.Agent(defaultSecureOptions)
+  })
+
+  _logger('Proxy configured with TLS options: %s', JSON.stringify({
+    tlsConfigured: Object.keys(defaultTlsOptions).some(k => defaultTlsOptions[k]),
+    secureConfigured: defaultSecureOptions.rejectUnauthorized
+  }))
 
   const bailout = aoUnit === 'cu' ? bailoutWith({ fetch, surUrl, processToHost, ownerToHost }) : undefined
   const determineHost = determineHostWith({ hosts, bailout })
@@ -97,7 +129,31 @@ export function proxyWith ({ aoUnit, hosts, surUrl, processToHost, ownerToHost }
              * Reverse proxy the request to the underlying selected host.
              * If an error occurs, return the next iteration for our trampoline to invoke.
              */
-            proxy.web(req, res, { target: host, buffer }, (err) => {
+            const isHttpsTarget = host.startsWith('https://')
+            
+            // Use appropriate proxy options based on target protocol
+            const proxyOptions = {
+              target: host,
+              buffer,
+              // For HTTPS targets, ensure proper TLS handling
+              ...(isHttpsTarget ? {
+                changeOrigin: true,
+                // Additional secure options for this specific target can be added here
+                secure: defaultSecureOptions.rejectUnauthorized,
+                // Handle potential SNI by extracting hostname from the target URL
+                headers: {
+                  host: new URL(host).hostname
+                }
+              } : {})
+            }
+            
+            _logger('Using proxy options: %s', JSON.stringify({
+              target: host,
+              isHttpsTarget,
+              secure: proxyOptions.secure
+            }))
+            
+            proxy.web(req, res, proxyOptions, (err) => {
               /**
                * No error occurred, so we're done
                */

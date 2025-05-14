@@ -19,6 +19,27 @@ const stringifiedJsonSchema = z.preprocess(
   z.record(z.string())
 )
 
+// Schema for TLS options
+const tlsOptionsSchema = z.object({
+  keyPath: z.string().optional(),
+  certPath: z.string().optional(),
+  caPath: z.string().optional(),
+  // Additional direct content can be provided instead of files
+  key: z.string().optional(),
+  cert: z.string().optional(),
+  ca: z.string().optional(),
+  passphrase: z.string().optional()
+}).optional()
+
+// Schema for secure options (certificate validation)
+const secureOptionsSchema = z.object({
+  rejectUnauthorized: z.boolean().optional(),
+  checkServerIdentity: z.boolean().optional(),
+  minVersion: z.string().optional(),
+  maxVersion: z.string().optional(),
+  ciphers: z.string().optional()
+}).optional()
+
 /**
  * The server config is an extension of the config required by the domain (business logic).
  * This prevents our domain from being aware of the environment it is running in ie.
@@ -40,7 +61,17 @@ const serverConfigSchema = z.object({
   ),
   aoUnit: z.enum(['cu', 'mu']),
   strategy: z.enum(['proxy', 'redirect']),
-  surUrl: z.string().url()
+  surUrl: z.string().url(),
+  // Add TLS options to the schema
+  tlsOptions: z.preprocess(
+    (val) => val ? (typeof val === 'string' ? JSON.parse(val) : val) : undefined,
+    tlsOptionsSchema
+  ),
+  // Add secure options to the schema
+  secureOptions: z.preprocess(
+    (val) => val ? (typeof val === 'string' ? JSON.parse(val) : val) : undefined,
+    secureOptionsSchema
+  )
 })
 
 /**
@@ -64,7 +95,9 @@ const CONFIG_ENVS = {
      */
     aoUnit: process.env.AO_UNIT || 'cu',
     strategy: process.env.STRATEGY || 'proxy',
-    surUrl: process.env.SUR_URL
+    surUrl: process.env.SUR_URL,
+    tlsOptions: process.env.TLS_OPTIONS,
+    secureOptions: process.env.SECURE_OPTIONS
   },
   production: {
     MODE,
@@ -75,7 +108,9 @@ const CONFIG_ENVS = {
     fromModuleToHost: process.env.FROM_MODULE_TO_HOST || JSON.stringify({}),
     aoUnit: process.env.AO_UNIT,
     strategy: process.env.STRATEGY || 'proxy',
-    surUrl: process.env.SUR_URL
+    surUrl: process.env.SUR_URL,
+    tlsOptions: process.env.TLS_OPTIONS,
+    secureOptions: process.env.SECURE_OPTIONS
   }
 }
 
