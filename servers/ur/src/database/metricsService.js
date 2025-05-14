@@ -346,64 +346,75 @@ export async function getTimeSeriesData(hours = 24) {
           _logger('Simple time_received check returned no rows');
         }
         
-        // Use column names without quotes first, with fallback to quoted version if needed
-        let result;
+        // Since we can query the column directly but date_trunc is failing,
+        // let's use a simpler approach - get all records and handle date grouping in JavaScript
         try {
-          result = await query(
+          const rawResult = await query(
             `SELECT 
-               date_trunc('hour', time_received) as hour,
-               COUNT(*) as total_requests,
-               jsonb_object_agg(process_id, process_count) as process_counts
-             FROM (
-               SELECT 
-                 date_trunc('hour', time_received) as hour,
-                 process_id,
-                 COUNT(*) as process_count
-               FROM metrics_requests
-               WHERE time_received > NOW() - interval '${hours} hours'
-               GROUP BY hour, process_id
-               ORDER BY hour, process_count DESC
-             ) AS hourly_process_counts
-             GROUP BY hour
-             ORDER BY hour ASC`,
+               time_received,
+               process_id
+             FROM metrics_requests 
+             WHERE time_received > NOW() - interval '${hours} hours'
+             ORDER BY time_received ASC`,
             [], // params
             10000 // 10 second timeout
           );
-          return await processTimeSeriesResults(result, hours);
-        } catch (err) {
-          _logger('Error in unquoted column query: %s', err.message);
-          // Try with quotes around column names as fallback
-          try {
-            result = await query(
-              `SELECT 
-                 date_trunc('hour', "time_received") as hour,
-                 COUNT(*) as total_requests,
-                 jsonb_object_agg("process_id", process_count) as process_counts
-               FROM (
-                 SELECT 
-                   date_trunc('hour', "time_received") as hour,
-                   "process_id",
-                   COUNT(*) as process_count
-                 FROM metrics_requests
-                 WHERE "time_received" > NOW() - interval '${hours} hours'
-                 GROUP BY hour, "process_id"
-                 ORDER BY hour, process_count DESC
-               ) AS hourly_process_counts
-               GROUP BY hour
-               ORDER BY hour ASC`,
-              [], // params
-              10000 // 10 second timeout
-            );
-            return await processTimeSeriesResults(result, hours);
-          } catch (innerErr) {
-            _logger('Error in quoted column query: %s', innerErr.message);
-            // Both approaches failed, return empty result
-            return {
-              timeSeriesData: [],
-              hourlyData: [],
-              totalRequests: 0
-            };
+          
+          _logger('Retrieved %d records for time series data', rawResult.rows.length);
+          
+          // Process the raw data in JavaScript
+          const hourlyData = {};
+          const processCounts = {};
+          let totalRequests = 0;
+          
+          // Group by hour in JavaScript
+          for (const row of rawResult.rows) {
+            const date = new Date(row.time_received);
+            // Truncate to hour - set minutes, seconds, ms to 0
+            date.setMinutes(0, 0, 0);
+            const hourKey = date.toISOString();
+            
+            // Initialize hour bucket if it doesn't exist
+            if (!hourlyData[hourKey]) {
+              hourlyData[hourKey] = {
+                hour: hourKey,
+                timestamp: date.getTime(),
+                total: 0,
+                processCounts: {}
+              };
+            }
+            
+            // Increment total counts
+            hourlyData[hourKey].total++;
+            totalRequests++;
+            
+            // Increment process-specific counts
+            const processId = row.process_id || 'unknown';
+            hourlyData[hourKey].processCounts[processId] = 
+              (hourlyData[hourKey].processCounts[processId] || 0) + 1;
+            
+            // Track overall process counts
+            processCounts[processId] = (processCounts[processId] || 0) + 1;
           }
+          
+          // Convert hourly data object to sorted array
+          const timeSeriesData = Object.values(hourlyData).sort((a, b) => a.timestamp - b.timestamp);
+          
+          return {
+            timeSeriesData,
+            hourlyData: Object.values(hourlyData),
+            totalRequests,
+            processCounts
+          };
+        } catch (err) {
+          _logger('Error retrieving time series data: %s', err.message);
+          // Return empty result structure
+          return {
+            timeSeriesData: [],
+            hourlyData: [],
+            totalRequests: 0,
+            processCounts: {}
+          };
         }
       } catch (err) {
         _logger('Error using time_received column: %s', err.message);

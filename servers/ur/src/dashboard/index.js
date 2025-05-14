@@ -61,11 +61,16 @@ export function generateDashboardHtml(metrics) {
   const actionMetricsTable = generateActionMetricsTable(metrics);
   const clientMetricsTable = generateClientMetricsTable(metrics);
   
+  // Ensure all metrics objects exist to prevent Object.keys errors
+  metrics.processCounts = metrics.processCounts || {};
+  metrics.actionCounts = metrics.actionCounts || {};
+  metrics.ipCounts = metrics.ipCounts || {};
+  
   // Generate the overview stats
   const statsOverview = `
     <div class="stats-overview">
       <div class="stat-box">
-        <div class="stat-number">${metrics.totalRequests}</div>
+        <div class="stat-number">${metrics.totalRequests || 0}</div>
         <div class="stat-label">Total Requests</div>
       </div>
       <div class="stat-box">
@@ -77,7 +82,7 @@ export function generateDashboardHtml(metrics) {
         <div class="stat-label">Different Actions</div>
       </div>
       <div class="stat-box">
-        <div class="stat-number">${metrics.ipCounts.length}</div>
+        <div class="stat-number">${Object.keys(metrics.ipCounts).length}</div>
         <div class="stat-label">Unique IPs</div>
       </div>
     </div>
