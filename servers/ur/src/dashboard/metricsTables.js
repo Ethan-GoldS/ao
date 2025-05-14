@@ -63,6 +63,10 @@ function formatJsonForDisplay(jsonObj) {
 }
 
 export function generateRecentRequestsTable(recentRequests, requestDetails) {
+  // Ensure parameters are defined with defaults
+  recentRequests = recentRequests || [];
+  requestDetails = requestDetails || {};
+  
   // Generate recent requests table with dropdowns for details
   const recentRequestsHtml = recentRequests.map((req, index) => {
     // Try to get request details for this process ID
@@ -219,15 +223,41 @@ export function generateRecentRequestsTable(recentRequests, requestDetails) {
 }
 
 export function generateProcessMetricsTable(metrics) {
-  const processMetricsHtml = Object.entries(metrics.processCounts)
+  // Ensure metrics objects exist
+  metrics = metrics || {};
+  const processCounts = metrics.processCounts || {};
+  const processTiming = metrics.processTiming || {};
+  const topProcessIds = metrics.topProcessIds || [];
+  const timeSeriesData = metrics.timeSeriesData || [];
+  const timeLabels = metrics.timeLabels || [];
+  
+  // Handle case with no process data
+  if (Object.keys(processCounts).length === 0) {
+    return `
+      <table class="metrics-table">
+        <thead>
+          <tr>
+            <th>Process ID</th>
+            <th>Request Count</th>
+            <th>Avg Duration</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td colspan="3">No process data available</td></tr>
+        </tbody>
+      </table>
+    `;
+  }
+  
+  const processMetricsHtml = Object.entries(processCounts)
     .sort((a, b) => b[1] - a[1]) // Sort by count descending
     .map(([processId, count]) => {
-      const timing = metrics.processTiming[processId] || { avgDuration: 0 };
-      const isTopProcess = metrics.topProcessIds.includes(processId);
+      const timing = processTiming[processId] || { avgDuration: 0 };
+      const isTopProcess = topProcessIds.includes(processId);
       
       // Create process-specific time series data
-      const processTimeData = metrics.timeSeriesData.map(bucket => 
-        bucket.processCounts[processId] || 0
+      const processTimeData = timeSeriesData.map(bucket => 
+        bucket && bucket.processCounts ? (bucket.processCounts[processId] || 0) : 0
       );
       
       return `
@@ -279,12 +309,35 @@ export function generateProcessMetricsTable(metrics) {
 }
 
 export function generateActionMetricsTable(metrics) {
-  const actionMetricsHtml = Object.entries(metrics.actionCounts)
+  // Ensure metrics objects exist
+  metrics = metrics || {};
+  const actionCounts = metrics.actionCounts || {};
+  const actionTiming = metrics.actionTiming || {};
+  
+  // Handle case with no action data
+  if (Object.keys(actionCounts).length === 0) {
+    return `
+      <table class="metrics-table">
+        <thead>
+          <tr>
+            <th>Action</th>
+            <th>Request Count</th>
+            <th>Avg Duration</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td colspan="3">No action data available</td></tr>
+        </tbody>
+      </table>
+    `;
+  }
+  
+  const actionMetricsHtml = Object.entries(actionCounts)
     .sort((a, b) => b[1] - a[1]) // Sort by count descending
     .map(([action, count]) => {
-      const timing = metrics.actionTiming[action] || { avgDuration: 0 };
+      const timing = actionTiming[action] || { avgDuration: 0 };
       return `
-        <tr class="action-row" data-action="${action}">
+        <tr>
           <td>${action}</td>
           <td>${count}</td>
           <td>${timing.avgDuration.toFixed(2)}ms</td>
@@ -316,8 +369,28 @@ export function generateActionMetricsTable(metrics) {
 }
 
 export function generateClientMetricsTable(metrics) {
+  // Ensure metrics objects exist
+  metrics = metrics || {};
+  const ipCounts = metrics.ipCounts || {};
+  const referrerCounts = metrics.referrerCounts || {};
+  const originCounts = metrics.originCounts || {};
+  
+  // Handle case with no client data
+  if (Object.keys(ipCounts).length === 0 && 
+      Object.keys(referrerCounts).length === 0 && 
+      Object.keys(originCounts).length === 0) {
+    return `
+      <div class="metrics-tables client-metrics">
+        <h3>Client Metrics</h3>
+        <p>No client metrics data available</p>
+      </div>
+    `;
+  }
+  
   // Generate IP address metrics
-  const ipMetricsHtml = metrics.ipCounts
+  const ipMetricsHtml = Object.entries(ipCounts)
+    .sort((a, b) => b[1] - a[1]) // Sort by count (descending)
+    .slice(0, 10) // Only show top 10
     .map(([ip, count]) => `
       <tr>
         <td>${ip}</td>
@@ -326,7 +399,9 @@ export function generateClientMetricsTable(metrics) {
     `).join('');
     
   // Generate referrer metrics
-  const referrerMetricsHtml = metrics.referrerCounts
+  const referrerMetricsHtml = Object.entries(referrerCounts)
+    .sort((a, b) => b[1] - a[1]) // Sort by count (descending)
+    .slice(0, 10) // Only show top 10
     .map(([referrer, count]) => `
       <tr>
         <td>${referrer}</td>
