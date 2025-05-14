@@ -329,14 +329,12 @@ export async function getTimeSeriesData(hours = 24) {
       // Column exists, use it
       try {
         _logger('Attempting to query using time_received column...');
-        // Try a simpler query first to verify column access
+        // First do a simple check to see if we can query time_received at all
         const simpleCheck = await query(
-          `SELECT 
-             MIN("time_received") as min_time,
-             MAX("time_received") as max_time, 
-             COUNT(*) as count
-           FROM metrics_requests
-           LIMIT 1`
+          `SELECT COUNT(*) as count, MIN(time_received) as min_time, MAX(time_received) as max_time 
+           FROM metrics_requests`,
+          [],
+          5000
         );
         
         if (simpleCheck.rows.length > 0) {
@@ -348,28 +346,65 @@ export async function getTimeSeriesData(hours = 24) {
           _logger('Simple time_received check returned no rows');
         }
         
-        // Now try the main query with quoted column names
-        const result = await query(
-          `SELECT 
-             date_trunc('hour', "time_received") as hour,
-             COUNT(*) as total_requests,
-             jsonb_object_agg("process_id", process_count) as process_counts
-           FROM (
-             SELECT 
-               date_trunc('hour', "time_received") as hour,
-               "process_id",
-               COUNT(*) as process_count
-             FROM metrics_requests
-             WHERE "time_received" > NOW() - interval '${hours} hours'
-             GROUP BY hour, "process_id"
-             ORDER BY hour, process_count DESC
-           ) AS hourly_process_counts
-           GROUP BY hour
-           ORDER BY hour ASC`,
-          [], // params
-          10000 // 10 second timeout
-        );
-        return await processTimeSeriesResults(result, hours);
+        // Use column names without quotes first, with fallback to quoted version if needed
+        let result;
+        try {
+          result = await query(
+            `SELECT 
+               date_trunc('hour', time_received) as hour,
+               COUNT(*) as total_requests,
+               jsonb_object_agg(process_id, process_count) as process_counts
+             FROM (
+               SELECT 
+                 date_trunc('hour', time_received) as hour,
+                 process_id,
+                 COUNT(*) as process_count
+               FROM metrics_requests
+               WHERE time_received > NOW() - interval '${hours} hours'
+               GROUP BY hour, process_id
+               ORDER BY hour, process_count DESC
+             ) AS hourly_process_counts
+             GROUP BY hour
+             ORDER BY hour ASC`,
+            [], // params
+            10000 // 10 second timeout
+          );
+          return await processTimeSeriesResults(result, hours);
+        } catch (err) {
+          _logger('Error in unquoted column query: %s', err.message);
+          // Try with quotes around column names as fallback
+          try {
+            result = await query(
+              `SELECT 
+                 date_trunc('hour', "time_received") as hour,
+                 COUNT(*) as total_requests,
+                 jsonb_object_agg("process_id", process_count) as process_counts
+               FROM (
+                 SELECT 
+                   date_trunc('hour', "time_received") as hour,
+                   "process_id",
+                   COUNT(*) as process_count
+                 FROM metrics_requests
+                 WHERE "time_received" > NOW() - interval '${hours} hours'
+                 GROUP BY hour, "process_id"
+                 ORDER BY hour, process_count DESC
+               ) AS hourly_process_counts
+               GROUP BY hour
+               ORDER BY hour ASC`,
+              [], // params
+              10000 // 10 second timeout
+            );
+            return await processTimeSeriesResults(result, hours);
+          } catch (innerErr) {
+            _logger('Error in quoted column query: %s', innerErr.message);
+            // Both approaches failed, return empty result
+            return {
+              timeSeriesData: [],
+              hourlyData: [],
+              totalRequests: 0
+            };
+          }
+        }
       } catch (err) {
         _logger('Error using time_received column: %s', err.message);
         // Continue to fallback methods

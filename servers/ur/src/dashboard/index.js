@@ -39,11 +39,18 @@ export function generateDashboardHtml(metrics) {
   // Add top process IDs to metrics
   metrics.topProcessIds = topProcessIds;
   
-  // Get time labels for charts
-  metrics.timeLabels = metrics.timeSeriesData.map(bucket => {
+  // Get time labels for charts (with null check)
+  metrics.timeLabels = (metrics.timeSeriesData || []).map(bucket => {
+    if (!bucket || !bucket.timestamp) return 'N/A';
     const date = new Date(bucket.timestamp);
     return `${date.getHours()}:${String(date.getMinutes()).padStart(2, '0')}`;
   });
+  
+  // Ensure all required metrics properties have default values
+  metrics.timeSeriesData = metrics.timeSeriesData || [];
+  metrics.hourlyData = metrics.hourlyData || [];
+  metrics.totalRequests = metrics.totalRequests || 0;
+  metrics.requestCount = metrics.requestCount || 0;
   
   // Generate each section of the dashboard
   const lastUpdated = new Date().toISOString();
