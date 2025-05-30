@@ -1,6 +1,6 @@
 import { Transform } from 'node:stream'
 
-import { Resolved, fromPromise, of } from 'hyper-async'
+import { Resolved, Rejected, fromPromise, of } from 'hyper-async'
 import { T, always, ascend, cond, equals, identity, ifElse, isNil, last, length, pipe, prop, reduce, uniqBy } from 'ramda'
 import ms from 'ms'
 
@@ -752,27 +752,30 @@ function loadCronMessagesWith ({ loadTimestamp, findBlocks, loadBlocksMeta, load
  * @returns {LoadMessages}
  */
 export function loadMessagesWith (env) {
+  const logger = env.logger.child('loadMessages')
+  env = { ...env, logger }
+
   const loadScheduledMessages = loadScheduledMessagesWith(env)
   const loadCronMessages = loadCronMessagesWith(env)
-  const prependProcessMessage = maybePrependProcessMessage
 
-  return (ctx) => of(ctx)
-    .chain((ctx) => loadScheduledMessages(ctx)
-      .map((res) => {
-        ctx.stats.messages.scheduled = res.count
-        return res.messages
-      })
-      .catch(error => {
-        // Check if this is a HashChain validation error and handle it gracefully
-        if (error && error.message && error.message.includes('HashChain invalid')) {
-          env.logger.warn('Caught HashChain validation error in loadMessages. Continuing with empty scheduled messages: %s', error.message)
-          // Return empty scheduled messages to allow processing to continue
-          return []
-        }
-        // Rethrow other errors
-        throw error
-      })
-    )
-    .chain($scheduled => loadCronMessages({ ...ctx, $scheduled }))
-    .map(messages => ({ ...ctx, messages }))
+  return (ctx) =>
+    of(ctx)
+      .chain((ctx) => loadScheduledMessages(ctx))
+      .bichain(
+        // Error handler using bichain for Hyper-Async compatibility
+        (error) => {
+          // Check if this is a HashChain validation error and handle it gracefully
+          if (error && error.message && error.message.includes('HashChain invalid')) {
+            logger.warn('Caught HashChain validation error in loadMessages. Continuing with empty messages: %s', error.message)
+            // Return a Resolved with empty messages to allow processing to continue
+            return Resolved({ messages: [], count: 0 })
+          }
+          // Propagate other errors
+          return Rejected(error)
+        },
+        // Success handler
+        (result) => Resolved(result)
+      )
+      .chain($scheduled => loadCronMessages({ ...ctx, $scheduled }))
+      .map(messages => ({ ...ctx, messages }))
 }
