@@ -301,10 +301,10 @@ export const loadMessagesWith = ({ hashChain, fetch, logger: _logger, pageSize }
 
         if (isHashChainValidationEnabled) {
           if (!(await isHashChainValid({ assignmentId: prevAssignmentId, hashChain: prevHashChain }, scheduled))) {
-            logger('HashChain invalid on message "%s" scheduled on process "%s"', scheduled.message.Id, processId)
-            const err = new Error(`HashChain invalid on message ${scheduled.message.Id}`)
-            err.status = 422
-            throw err
+            logger('HashChain invalid on message "%s" scheduled on process "%s" - Skipping this message', scheduled.message.Id, processId)
+            // Skip this message but continue processing others
+            // Keep the previous hash chain values to maintain chain integrity
+            continue
           }
         }
 

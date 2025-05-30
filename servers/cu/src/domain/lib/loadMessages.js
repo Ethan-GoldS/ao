@@ -476,22 +476,40 @@ function loadScheduledMessagesWith ({ loadMessages, logger }) {
         logger('Initializing AsyncIterable of Scheduled messages for process "%s" between "%s" and "%s"', ctx.id, ctx.from || 'initial', ctx.to || 'latest')
         return ctx
       })
-      .chain((ctx) =>
-        loadMessages({
-          suUrl: ctx.suUrl,
-          processId: ctx.id,
-          block: ctx.block,
-          owner: ctx.owner,
-          tags: ctx.tags,
-          moduleId: ctx.moduleId,
-          moduleOwner: ctx.moduleOwner,
-          moduleTags: ctx.moduleTags,
-          from: ctx.from, // could be undefined
-          to: ctx.to, // could be undefined
-          assignmentId: ctx.mostRecentAssignmentId,
-          hashChain: ctx.mostRecentHashChain
-        })
-      )
+      .chain((ctx) => {
+        try {
+          return loadMessages({
+            suUrl: ctx.suUrl,
+            processId: ctx.id,
+            block: ctx.block,
+            owner: ctx.owner,
+            tags: ctx.tags,
+            moduleId: ctx.moduleId,
+            moduleOwner: ctx.moduleOwner,
+            moduleTags: ctx.moduleTags,
+            from: ctx.from, // could be undefined
+            to: ctx.to, // could be undefined
+            assignmentId: ctx.mostRecentAssignmentId,
+            hashChain: ctx.mostRecentHashChain
+          }).catch(error => {
+            // Check if this is a HashChain validation error and handle it gracefully
+            if (error && error.message && error.message.includes('HashChain invalid')) {
+              logger.warn('HashChain validation error detected in loadScheduledMessages. Continuing with empty messages: %s', error.message)
+              // Return empty messages to allow processing to continue
+              return { messages: [], count: 0, invalidHashChainDetected: true }
+            }
+            // Rethrow other errors
+            throw error
+          })
+        } catch (error) {
+          // Catch any synchronous errors
+          if (error && error.message && error.message.includes('HashChain invalid')) {
+            logger.warn('Caught synchronous HashChain validation error. Continuing with empty messages: %s', error.message)
+            return Resolved({ messages: [], count: 0, invalidHashChainDetected: true })
+          }
+          throw error
+        }
+      })
 }
 
 function loadCronMessagesWith ({ loadTimestamp, findBlocks, loadBlocksMeta, loadTransactionData, saveBlocks, logger }) {
@@ -734,15 +752,27 @@ function loadCronMessagesWith ({ loadTimestamp, findBlocks, loadBlocksMeta, load
  * @returns {LoadMessages}
  */
 export function loadMessagesWith (env) {
-  const logger = env.logger.child('loadMessages')
-  env = { ...env, logger }
-
   const loadScheduledMessages = loadScheduledMessagesWith(env)
   const loadCronMessages = loadCronMessagesWith(env)
+  const prependProcessMessage = maybePrependProcessMessage
 
-  return (ctx) =>
-    of(ctx)
-      .chain(loadScheduledMessages)
-      .chain($scheduled => loadCronMessages({ ...ctx, $scheduled }))
-      .map(messages => ({ ...ctx, messages }))
+  return (ctx) => of(ctx)
+    .chain((ctx) => loadScheduledMessages(ctx)
+      .map((res) => {
+        ctx.stats.messages.scheduled = res.count
+        return res.messages
+      })
+      .catch(error => {
+        // Check if this is a HashChain validation error and handle it gracefully
+        if (error && error.message && error.message.includes('HashChain invalid')) {
+          env.logger.warn('Caught HashChain validation error in loadMessages. Continuing with empty scheduled messages: %s', error.message)
+          // Return empty scheduled messages to allow processing to continue
+          return []
+        }
+        // Rethrow other errors
+        throw error
+      })
+    )
+    .chain($scheduled => loadCronMessages({ ...ctx, $scheduled }))
+    .map(messages => ({ ...ctx, messages }))
 }

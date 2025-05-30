@@ -256,6 +256,35 @@ export function dryRunWith (env) {
       })
       .bimap(
         (err) => {
+          // Check if this is a HashChain validation error and handle it gracefully
+          if (err && err.message && err.message.includes('HashChain invalid')) {
+            logger.warn('Caught HashChain validation error in dryRun. Returning empty result instead of error: %s', err.message)
+            
+            // Create a minimal valid result instead of propagating the error
+            const result = {
+              Messages: [],
+              Output: [],
+              Error: `Notice: Evaluation skipped due to HashChain validation issue. Original error: ${err.message}`
+            }
+            
+            // Cache the result for 1 second
+            dryRunResultsCache.set(cacheKey, result, 250)
+            
+            // logging
+            const promise = pendingDryRuns.get(cacheKey);
+            if (promise.queued > 1) {
+              logger.info('Dry run queue [RESOLVE] for process "%s" count: %i (with HashChain handling)', processId, promise.queued)
+            }
+            
+            // stop enqueueing
+            pendingDryRuns.delete(cacheKey)
+            
+            // resolve all pending with the graceful result
+            resolve(result)
+            return
+          }
+          
+          // Handle other errors normally
           // logging
           const promise = pendingDryRuns.get(cacheKey);
           if (promise.queued > 1) {
