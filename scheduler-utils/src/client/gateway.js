@@ -1,4 +1,4 @@
-import { defaultTo, find, juxt, path, pipe, prop, propEq } from 'ramda'
+import { defaultTo, find, juxt, path, pipe, prop } from 'ramda'
 
 import { InvalidSchedulerLocationError, SchedulerTagNotFoundError, TransactionNotFoundError } from '../err.js'
 import { backoff, okRes } from '../utils.js'
@@ -9,7 +9,7 @@ const SCHEDULER_TAG = 'Scheduler'
 
 const findTagValue = (name) => pipe(
   defaultTo([]),
-  find(propEq(name, 'name')),
+  find(tag => tag.name && tag.name.toLowerCase() === name.toLowerCase()),
   defaultTo({}),
   prop('value')
 )
@@ -43,7 +43,12 @@ export function loadProcessSchedulerWith ({ fetch, GRAPHQL_URL, GRAPHQL_MAX_RETR
 
   const GET_TRANSACTIONS_QUERY = `
     query GetTransactions ($transactionIds: [ID!]!) {
-      transactions(ids: $transactionIds) {
+      transactions(
+        ids: $transactionIds
+        tags: [
+          { name: "Data-Protocol", values: ["ao"] }
+        ]
+      ) {
         edges {
           node {
             tags {
