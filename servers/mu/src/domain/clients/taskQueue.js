@@ -1,3 +1,5 @@
+import createKeccakHash from 'keccak'
+
 import { randomBytes } from 'crypto'
 import { TASKS_TABLE } from './sqlite.js'
 
@@ -51,7 +53,70 @@ export async function createTaskQueue ({ queueId, logger, db }) {
  * and a random hex string. This is so that it can
  * be removed from the database when dequeuing.
  */
-export function enqueueWith ({ queue, queueId, logger, db, getRecentTraces, IP_WALLET_RATE_LIMIT, IP_WALLET_RATE_LIMIT_INTERVAL }) {
+export function enqueueWith ({ queue, queueId, logger, db, getRecentTraces, toAddress, getRateLimits, IP_WALLET_RATE_LIMIT, IP_WALLET_RATE_LIMIT_INTERVAL, rateLimits }) {
+  function keyToEthereumAddress (key) {
+    /**
+     * We need to decode, then remove the first byte denoting compression in secp256k1
+     */
+    const noCompressionByte = Buffer.from(key, 'base64url').subarray(1)
+
+    /**
+     * the un-prefixed address is the last 20 bytes of the hashed
+     * public key
+     */
+    const noPrefix = createKeccakHash('keccak256')
+      .update(noCompressionByte)
+      .digest('hex')
+      .slice(-40)
+
+    /**
+     * Apply the checksum see https://eips.ethereum.org/EIPS/eip-55
+     */
+    const hash = createKeccakHash('keccak256')
+      .update(noPrefix)
+      .digest('hex')
+
+    let checksumAddress = '0x'
+    for (let i = 0; i < noPrefix.length; i++) {
+      checksumAddress += parseInt(hash[i], 16) >= 8
+        ? noPrefix[i].toUpperCase()
+        : noPrefix[i]
+    }
+
+    return checksumAddress
+  }
+
+  async function checkRateLimitExceeded (task) {
+    function calculateRateLimit (walletID, procID, limits) {
+      if (!walletID) return 100
+      if (!limits || Object.keys(limits).length === 0) return 50
+      const userBase = Number(limits?.addresses?.[walletID] ?? 0) + Number(limits.default)
+      const processLimits = limits?.processes?.[procID] ?? {}
+      const processDivisor = Number(processLimits?.divide ?? 1)
+      const processSubtractor = Number(processLimits?.subtract ?? 0)
+      return Math.max(0, (userBase / processDivisor) - processSubtractor)
+    }
+    const intervalStart = new Date().getTime() - IP_WALLET_RATE_LIMIT_INTERVAL
+    const wallet = task?.wallet || task?.cachedMsg?.wallet || null
+    const processId = task?.cachedMsg?.msg?.Target || task?.processId || null
+    let address = task?.cachedMsg?.cron ? wallet : await toAddress(wallet)
+    const owner = (task.parentOwner ?? task?.wallet ?? task.cachedMsg?.wallet)
+    if (owner?.length === 87) {
+      address = keyToEthereumAddress(owner)
+    }
+    const rateLimits = getRateLimits()
+    const isWhitelisted = (rateLimits?.ips?.[task?.ip] ?? 0) > 1
+    if (isWhitelisted) return false
+    const rateLimitAllowance = calculateRateLimit(address, processId, rateLimits)
+    const recentTraces = await getRecentTraces({ wallet, ip: task.ip, timestamp: intervalStart, processId, isSpawn: task?.type === 'SPAWN' })
+    const walletTracesCount = recentTraces.wallet.length
+    console.log(`Rate limit result for address ${address}, ${walletTracesCount} wallet traces found, ${rateLimitAllowance} rate limit allowance`)
+    if (walletTracesCount >= rateLimitAllowance) {
+      logger({ log: 'Rate limit exceeded. Skipping enqueueing task.' })
+      return true
+    }
+    return false
+  }
   function createQuery (task, dbId, timestamp) {
     return {
       sql: `
@@ -68,13 +133,8 @@ export function enqueueWith ({ queue, queueId, logger, db, getRecentTraces, IP_W
     }
   }
   return async (task) => {
-    const intervalStart = new Date().getTime() - IP_WALLET_RATE_LIMIT_INTERVAL
-    const wallet = task?.wallet || task?.cachedMsg?.wallet || null
-    const recentTraces = await getRecentTraces({ wallet, ip: task.ip, timestamp: intervalStart })
-    if (recentTraces.wallet.length >= IP_WALLET_RATE_LIMIT || recentTraces.ip.length >= IP_WALLET_RATE_LIMIT) {
-      logger({ log: `Rate limit exceeded for wallet ${task.wallet} and ip ${task.ip}, ${recentTraces.wallet.length} wallet traces, ${recentTraces.ip.length} ip traces found. Skipping task.` })
-      return
-    }
+    const rateLimitExceeded = await checkRateLimitExceeded(task)
+    if (rateLimitExceeded) return
     const timestamp = new Date().getTime()
     const randomByteString = randomBytes(8).toString('hex')
     const dbId = `${queueId}-${timestamp}-${randomByteString}`

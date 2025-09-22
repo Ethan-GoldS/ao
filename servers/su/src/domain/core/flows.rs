@@ -7,6 +7,7 @@ use dotenv::dotenv;
 use serde_json::json;
 use simd_json::to_string as simd_to_string;
 use tokio::sync::Mutex;
+use sha2::{Digest, Sha256};
 
 use super::builder::Builder;
 use super::bytes::{DataBundle, DataItem};
@@ -213,6 +214,75 @@ async fn maybe_recalc_deephashes(deps: Arc<Deps>, process_id: &String) -> Result
     Ok(())
 }
 
+fn limit_message_size(
+  deps: &Arc<Deps>, 
+  input: &Vec<u8>, 
+  data_item: &Option<DataItem>
+) -> Result<(), String> {
+    let enable_message_max_size = deps.config.enable_message_max_size();
+    let max_size_owner_whitelist = deps.config.max_size_owner_whitelist();
+    let max_size_from_owner_whitelist = deps.config.max_size_from_owner_whitelist();
+    let max_size_from_whitelist = deps.config.max_size_from_whitelist();
+    let max_message_size = deps.config.max_message_size();
+
+    if !enable_message_max_size {
+        return Ok(());
+    }
+
+    if let Some(item) = data_item {
+        let tags = item.tags();
+        let from_process = tags.iter().find(
+          |tag| tag.name == "From-Process" || tag.name == "from-process"
+        );
+
+        let owner = item.owner().to_string();
+        let owner_bytes = match base64_url::decode(&owner) {
+            Ok(b) => b,
+            Err(_) => return Err("Unable to decode owner".to_string()),
+        };
+        let mut hasher = Sha256::new();
+        hasher.update(owner_bytes);
+        let result = hasher.finalize();
+        let address_hash = result.to_vec();
+        let address = base64_url::encode(&address_hash);
+
+        println!("Owner: {}", address);
+        println!("From-process: {:?}", from_process);
+
+        match tags
+            .iter()
+            .find(|tag| tag.name == "Type" || tag.name == "type")
+        {
+            Some(type_tag) => match type_tag.value.as_str() {
+                "Process" => return Ok(()),
+                "Message" => (),
+                _ => return Err("Unsupported Type tag value".to_string()),
+            },
+            None => return Err("Type tag not present".to_string()),
+        }
+
+        if max_size_owner_whitelist.contains(&address) {
+            return Ok(());
+        }
+
+        if let Some(fp) = from_process {
+            if max_size_from_owner_whitelist.contains(&address) 
+              && max_size_from_whitelist.contains(&fp.value) {
+                return Ok(());
+            }
+        }
+    }
+
+    if input.len() > max_message_size {
+        return Err(format!(
+            "Message size exceeds maximum of {} bytes",
+            max_message_size
+        ));
+    }
+
+    Ok(())
+}
+
 /*
     This writes a message or process data item,
     it detects which it is creating by the tags.
@@ -249,6 +319,8 @@ pub async fn write_item(
             None => return Err("Type tag not present".to_string()),
         }
     };
+
+    limit_message_size(&deps, &input, &data_item)?;
 
     deps.logger.log(format!(
         "builder initialized item parsed target - {}",
@@ -354,16 +426,35 @@ pub async fn write_item(
             None => {
                 let tx_data = deps.gateway.raw(&assign).await?;
                 let dh = DataItem::deep_hash_fields(
+                    gateway_tx.recipient.clone(),
+                    gateway_tx.anchor.clone(),
+                    gateway_tx.tags.clone(),
+                    tx_data.clone(),
+                    true
+                )
+                .map_err(|_| "Unable to calculate deep hash".to_string())?;
+
+              let dh_unordered = DataItem::deep_hash_fields(
                     gateway_tx.recipient,
                     gateway_tx.anchor,
                     gateway_tx.tags,
                     tx_data,
+                    false
                 )
-                .map_err(|_| "Unable to calculate deep hash".to_string())?;
+                .map_err(|_| "Unable to calculate deep hash unordered".to_string())?;
 
                 if deps.config.enable_deep_hash_checks() {
                     deps.data_store
                         .check_existing_deep_hash(&process_id, &dh)
+                        .await?;
+
+                    /*
+                      A safety check for messages that may have been deep hashed
+                      with unordered tags, and have not yet been recalculated with
+                      ordered tags.
+                     */
+                    deps.data_store
+                        .check_existing_deep_hash(&process_id, &dh_unordered)
                         .await?;
                 }
 
@@ -549,7 +640,11 @@ pub async fn write_item(
             */
             Some(_) => {
                 let mut mutable_item = data_item.clone();
-                let deep_hash = match mutable_item.deep_hash() {
+                let deep_hash = match mutable_item.deep_hash(true) {
+                    Ok(d) => d,
+                    Err(_) => return Err("Unable to calculate deep hash".to_string()),
+                };
+                let deep_hash_unordered = match mutable_item.deep_hash(false) {
                     Ok(d) => d,
                     Err(_) => return Err("Unable to calculate deep hash".to_string()),
                 };
@@ -561,6 +656,14 @@ pub async fn write_item(
                 if deps.config.enable_deep_hash_checks() {
                     deps.data_store
                         .check_existing_deep_hash(&dtarget, &deep_hash)
+                        .await?;
+                    /*
+                      A safety check for messages that may have been deep hashed
+                      with unordered tags, and have not yet been recalculated with
+                      ordered tags.
+                     */
+                    deps.data_store
+                        .check_existing_deep_hash(&dtarget, &deep_hash_unordered)
                         .await?;
                 }
 
@@ -736,7 +839,7 @@ pub async fn msg_deephash(
 
             let mut message_item = bundle.items[1].clone();
             let deep_hash = match m.tags.iter().find(|tag| tag.name == "From-Process") {
-                Some(_) => match message_item.deep_hash() {
+                Some(_) => match message_item.deep_hash(true) {
                     Ok(d) => Some(d),
                     Err(_) => return Err("Unable to calculate deep hash".to_string()),
                 },
@@ -764,6 +867,7 @@ pub async fn msg_deephash(
                 gateway_tx.anchor,
                 gateway_tx.tags,
                 tx_data,
+                true
             )
             .map_err(|_| "Unable to calculate deep hash".to_string())?;
 

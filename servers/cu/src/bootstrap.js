@@ -369,7 +369,7 @@ export const createApis = async (ctx) => {
       loadMessages: AoSuClient.loadMessagesWith({
         hashChain: (...args) => hashChainWorker.exec('hashChain', args),
         fetch: ctx.fetch,
-        pageSize: 1000,
+        pageSize: ctx.LOAD_MESSAGES_PAGE_SIZE || 1000,
         logger
       }),
       loadProcessLatest: AoSuClient.loadProcessLatestWith({ fetch: ctx.fetch, logger }),
@@ -464,7 +464,7 @@ export const createApis = async (ctx) => {
       loadMessages: AoSuClient.loadMessagesWith({
         hashChain: (...args) => hashChainWorker.exec('hashChain', args),
         fetch: ctx.fetch,
-        pageSize: 1000,
+        pageSize: ctx.LOAD_MESSAGES_PAGE_SIZE || 1000,
         logger
       }),
       loadProcessLatest: AoSuClient.loadProcessLatestWith({ fetch: ctx.fetch, logger }),

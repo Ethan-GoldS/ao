@@ -1,5 +1,6 @@
 import { of, Rejected, fromPromise, Resolved } from 'hyper-async'
 import { compose, head, identity, isEmpty, prop, propOr } from 'ramda'
+import createKeccakHash from 'keccak'
 
 import { getCuAddressWith } from '../lib/get-cu-address.js'
 import { writeMessageTxWith } from '../lib/write-message-tx.js'
@@ -31,6 +32,11 @@ export function sendDataItemWith ({
   writeDataItemArweave,
   spawnPushEnabled,
   db,
+  getRecentTraces,
+  toAddress,
+  getRateLimits,
+  IP_WALLET_RATE_LIMIT,
+  IP_WALLET_RATE_LIMIT_INTERVAL,
   GET_RESULT_MAX_RETRIES,
   GET_RESULT_RETRY_DELAY,
   ENABLE_MESSAGE_RECOVERY
@@ -45,7 +51,72 @@ export function sendDataItemWith ({
   const insertMessage = insertMessageWith({ db })
 
   const locateProcessLocal = fromPromise(locateProcessSchema.implement(locateProcess))
+  function keyToEthereumAddress (key) {
+    /**
+     * We need to decode, then remove the first byte denoting compression in secp256k1
+     */
+    const noCompressionByte = Buffer.from(key, 'base64url').subarray(1)
 
+    /**
+     * the un-prefixed address is the last 20 bytes of the hashed
+     * public key
+     */
+    const noPrefix = createKeccakHash('keccak256')
+      .update(noCompressionByte)
+      .digest('hex')
+      .slice(-40)
+
+    /**
+     * Apply the checksum see https://eips.ethereum.org/EIPS/eip-55
+     */
+    const hash = createKeccakHash('keccak256')
+      .update(noPrefix)
+      .digest('hex')
+
+    let checksumAddress = '0x'
+    for (let i = 0; i < noPrefix.length; i++) {
+      checksumAddress += parseInt(hash[i], 16) >= 8
+        ? noPrefix[i].toUpperCase()
+        : noPrefix[i]
+    }
+
+    return checksumAddress
+  }
+
+  /**
+   * Check if the rate limit has been exceeded using rate limit injected
+   */
+  async function checkRateLimitExceeded (ctx) {
+    function calculateRateLimit (walletID, procID, limits) {
+      if (!limits || Object.keys(limits).length === 0) return 10
+      const userBase = Number(limits?.addresses?.[walletID] ?? 0) + Number(limits.default)
+      const processLimits = limits?.processes?.[procID] ?? {}
+
+      const processDivisor = Number(processLimits?.divide ?? 1)
+      const processSubtractor = Number(processLimits?.subtract ?? 0)
+      return Math.max(0, (userBase / processDivisor) - processSubtractor)
+    }
+    const rateLimits = getRateLimits()
+    const isWhitelisted = (rateLimits?.ips?.[ctx.ip] ?? 0) > 1
+    if (isWhitelisted) return Resolved(ctx)
+    const intervalStart = new Date().getTime() - IP_WALLET_RATE_LIMIT_INTERVAL
+    const wallet = ctx.dataItem.owner
+    let address = await toAddress(wallet) || null
+    if (ctx.dataItem.signature.length === 87) {
+      address = keyToEthereumAddress(ctx.dataItem.owner)
+    }
+    const rateLimitAllowance = calculateRateLimit(address, ctx.dataItem.target ?? 'SPAWN', rateLimits)
+    const recentTraces = await getRecentTraces({ wallet, timestamp: intervalStart, processId: ctx.dataItem.target })
+    const walletTracesCount = recentTraces.wallet.length
+    console.log(`Rate limit result for address ${address}, ${walletTracesCount} wallet traces found, ${rateLimitAllowance} rate limit allowance`)
+    if (walletTracesCount >= rateLimitAllowance) {
+      logger({ log: `Rate limit exceeded for wallet, ${recentTraces.wallet.length} wallet traces found. Rejecting.` })
+      const error = new Error('Rate limit exceeded')
+      error.code = 429
+      throw error
+    }
+    return Resolved(ctx)
+  }
   /**
      * If the data item is a Message, then cranking and tracing
      * must also be performed.
@@ -86,7 +157,8 @@ export function sendDataItemWith ({
                     assigns,
                     initialTxId,
                     parentId,
-                    ip: ctx.ip
+                    ip: ctx.ip,
+                    parentOwner: ctx.dataItem?.owner
                   })
                 })
                 .bimap(
@@ -239,6 +311,11 @@ export function sendDataItemWith ({
       .chain((ctx) =>
         verifyParsedDataItem(ctx.dataItem)
           .map(logger.tap({ log: 'Successfully verified parsed data item', logId: ctx.logId }))
+          .chain(({ isMessage }) => {
+            return of(ctx)
+              .chain(fromPromise(async () => await checkRateLimitExceeded(ctx)))
+              .map(() => ({ isMessage }))
+          })
           .chain(({ isMessage }) => {
             if (isMessage) {
               /*
