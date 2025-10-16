@@ -27,6 +27,13 @@ const jsonObjectSchema = z.preprocess((val) => {
   return val
 }, z.any())
 
+export const commaDelimitedArraySchema = z.preprocess((val) => {
+  if (Array.isArray(val)) return val
+  // ',' delimited string
+  if (typeof val === 'string') return val.split(',').map((s) => s.trim())
+  return val
+}, z.array(z.string()))
+
 /**
  * Some frameworks will implicitly override NODE_ENV
  *
@@ -43,7 +50,6 @@ if (!MODE) throw new Error('NODE_CONFIG_ENV must be defined')
 
 export const domainConfigSchema = z.object({
   CU_URL: z.string().url('CU_URL must be a a valid URL'),
-  HB_URL: z.string().url('HB_URL must be a a valid URL').optional(),
   MU_WALLET: z.record(z.any()),
   SCHEDULED_INTERVAL: z.number(),
   DUMP_PATH: z.string(),
@@ -87,7 +93,8 @@ export const domainConfigSchema = z.object({
   HB_ROUTER_URL: z.string(),
   ENABLE_HB_WALLET_CHECK: z.boolean(),
   HB_GRAPHQL_URL: z.string(),
-  RATE_LIMIT_FILE_URL: z.string().optional()
+  RATE_LIMIT_FILE_URL: z.string().optional(),
+  HB_PROCESSES_URL: z.string().optional()
 })
 
 /**
@@ -118,7 +125,6 @@ const CONFIG_ENVS = {
     ENABLE_METRICS_ENDPOINT: process.env.ENABLE_METRICS_ENDPOINT,
     MU_WALLET: walletKey,
     CU_URL: process.env.CU_URL || 'http://localhost:6363',
-    HB_URL: process.env.HB_URL || 'http://localhost:8734',
     GATEWAY_URL: process.env.GATEWAY_URL || 'https://arweave.net',
     GRAPHQL_URL: process.env.GRAPHQL_URL,
     ARWEAVE_URL: process.env.ARWEAVE_URL,
@@ -151,7 +157,8 @@ const CONFIG_ENVS = {
     HB_ROUTER_URL: process.env.HB_ROUTER_URL || 'https://forward.computer',
     ENABLE_HB_WALLET_CHECK: process.env.ENABLE_HB_WALLET_CHECK !== 'false',
     HB_GRAPHQL_URL: process.env.HB_GRAPHQL_URL || 'https://cache.forward.computer',
-    RATE_LIMIT_FILE_URL: process.env.RATE_LIMIT_FILE_URL || ''
+    RATE_LIMIT_FILE_URL: process.env.RATE_LIMIT_FILE_URL || '',
+    HB_PROCESSES_URL: process.env.HB_PROCESSES_URL || ''
   },
   production: {
     MODE,
@@ -159,7 +166,6 @@ const CONFIG_ENVS = {
     ENABLE_METRICS_ENDPOINT: process.env.ENABLE_METRICS_ENDPOINT,
     MU_WALLET: walletKey,
     CU_URL: process.env.CU_URL,
-    HB_URL: process.env.HB_URL || 'https://push-router.forward.computer',
     GATEWAY_URL: process.env.GATEWAY_URL || 'https://arweave.net',
     GRAPHQL_URL: process.env.GRAPHQL_URL,
     ARWEAVE_URL: process.env.ARWEAVE_URL,
@@ -192,7 +198,8 @@ const CONFIG_ENVS = {
     HB_ROUTER_URL: process.env.HB_ROUTER_URL || 'https://forward.computer',
     ENABLE_HB_WALLET_CHECK: process.env.ENABLE_HB_WALLET_CHECK !== 'false',
     HB_GRAPHQL_URL: process.env.HB_GRAPHQL_URL || 'https://cache.forward.computer',
-    RATE_LIMIT_FILE_URL: process.env.RATE_LIMIT_FILE_URL || ''
+    RATE_LIMIT_FILE_URL: process.env.RATE_LIMIT_FILE_URL || '',
+    HB_PROCESSES_URL: process.env.HB_PROCESSES_URL || ''
   }
 }
 

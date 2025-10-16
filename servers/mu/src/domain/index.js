@@ -122,7 +122,6 @@ const arweave = Arweave.init()
  */
 export const createApis = async (ctx) => {
   const CU_URL = ctx.CU_URL
-  const HB_URL = ctx.HB_URL
   const MU_WALLET = ctx.MU_WALLET
   const UPLOADER_URL = ctx.UPLOADER_URL
   const GRAPHQL_URL = ctx.GRAPHQL_URL
@@ -137,6 +136,7 @@ export const createApis = async (ctx) => {
   const ENABLE_HB_WALLET_CHECK = ctx.ENABLE_HB_WALLET_CHECK
   const HB_GRAPHQL_URL = ctx.HB_GRAPHQL_URL
   const RATE_LIMIT_FILE_URL = ctx.RATE_LIMIT_FILE_URL
+  const HB_PROCESSES_URL = ctx.HB_PROCESSES_URL
   
   let rateLimitFile = {}
   cron.schedule('*/10 * * * *', async () => {
@@ -186,6 +186,22 @@ export const createApis = async (ctx) => {
   // Create log database client
   const TRACE_DB_URL = `${ctx.TRACE_DB_URL}.sqlite`
   const traceDb = await SqliteClient.createSqliteClient({ url: TRACE_DB_URL, bootstrap: true, type: 'traces' })
+
+  let processesFile = {}
+  cron.schedule('*/5 * * * *', async () => {
+    if (!HB_PROCESSES_URL || HB_PROCESSES_URL === '') return
+    console.log('Updating HB_PROCESSES file after 5 minutes', HB_PROCESSES_URL)
+    const fetchedProcessesFile = await fetch(HB_PROCESSES_URL)
+      .then((res) => res.json())
+      .catch(err => {
+        console.error('Error updating hb processes file', err)
+        return {}
+      })
+    processesFile = { HB_PROCESSES: fetchedProcessesFile }
+    console.log('Updated processes file')
+  }, { runOnInit: true})
+
+  const fetchHBProcesses = () => { return processesFile }
 
   // Create trace database metrics
   MetricsClient.gaugeWith({})({
@@ -288,7 +304,7 @@ export const createApis = async (ctx) => {
     locateProcess: locate,
     writeDataItem: schedulerClient.writeDataItemWith({ fetch, histogram, logger: sendDataItemLogger, wallet: MU_WALLET }),
     fetchResult: cuClient.resultWith({ fetch: fetchWithCache, histogram, CU_URL, logger: sendDataItemLogger }),
-    fetchHyperBeamResult: cuClient.fetchHyperBeamResultWith({ fetch, HB_URL, histogram, logger: sendDataItemLogger }),
+    fetchHyperBeamResult: cuClient.fetchHyperBeamResultWith({ fetch, histogram, logger: sendDataItemLogger, fetchHBProcesses }),
     fetchSchedulerProcess: schedulerClient.fetchSchedulerProcessWith({ getByProcess, setByProcess, fetch, histogram, logger: sendDataItemLogger }),
     crank,
     isWallet: gatewayClient.isWalletWith({ fetch, histogram, getProcess, ARWEAVE_URL, SU_ROUTER_URL, HB_ROUTER_URL, ENABLE_HB_WALLET_CHECK, logger: sendDataItemLogger }),
@@ -305,7 +321,8 @@ export const createApis = async (ctx) => {
     IP_WALLET_RATE_LIMIT_INTERVAL: ctx.IP_WALLET_RATE_LIMIT_INTERVAL,
     GET_RESULT_MAX_RETRIES: ctx.GET_RESULT_MAX_RETRIES,
     GET_RESULT_RETRY_DELAY: ctx.GET_RESULT_RETRY_DELAY,
-    ENABLE_MESSAGE_RECOVERY: ctx.ENABLE_MESSAGE_RECOVERY
+    ENABLE_MESSAGE_RECOVERY: ctx.ENABLE_MESSAGE_RECOVERY,
+    fetchHBProcesses
   })
 
   const sendAssignLogger = logger.child('sendAssign')
@@ -445,7 +462,6 @@ export const createApis = async (ctx) => {
  */
 export const createResultApis = async (ctx) => {
   const CU_URL = ctx.CU_URL
-  const HB_URL = ctx.HB_URL
   const MU_WALLET = ctx.MU_WALLET
   const UPLOADER_URL = ctx.UPLOADER_URL
   const GRAPHQL_URL = ctx.GRAPHQL_URL
@@ -456,6 +472,7 @@ export const createResultApis = async (ctx) => {
   const HB_ROUTER_URL = ctx.HB_ROUTER_URL
   const ENABLE_HB_WALLET_CHECK = ctx.ENABLE_HB_WALLET_CHECK
   const HB_GRAPHQL_URL = ctx.HB_GRAPHQL_URL
+  const HB_PROCESSES_URL = ctx.HB_PROCESSES_URL
 
   const logger = ctx.logger
   const fetch = ctx.fetch
@@ -483,6 +500,22 @@ export const createResultApis = async (ctx) => {
   const getIsHyperBeamProcess = InMemoryClient.getByIdWith({ cache: isHyperBeamProcessCache })
   const setIsHyperBeamProcess = InMemoryClient.setByIdWith({ cache: isHyperBeamProcessCache })
 
+  let processesFile = {}
+  cron.schedule('*/5 * * * *', async () => {
+    if (!HB_PROCESSES_URL || HB_PROCESSES_URL === '') return
+    console.log('Updating HB_PROCESSES file after 5 minutes', HB_PROCESSES_URL)
+    const fetchedProcessesFile = await fetch(HB_PROCESSES_URL)
+      .then((res) => res.json())
+      .catch(err => {
+        console.error('Error updating hb processes file', err)
+        return {}
+      })
+    processesFile = { HB_PROCESSES: fetchedProcessesFile }
+    console.log('Updated processes file')
+  }, { runOnInit: true})
+
+  const fetchHBProcesses = () => { return processesFile }
+
   const processMsgLogger = logger.child('processMsg')
   const processMsg = processMsgWith({
     logger: processMsgLogger,
@@ -494,7 +527,7 @@ export const createResultApis = async (ctx) => {
     fetchSchedulerProcess: schedulerClient.fetchSchedulerProcessWith({ getByProcess, setByProcess, fetch, histogram, logger: processMsgLogger }),
     buildAndSign: signerClient.buildAndSignWith({ MU_WALLET, logger: processMsgLogger }),
     fetchResult: cuClient.resultWith({ fetch: fetchWithCache, histogram, CU_URL, logger: processMsgLogger }),
-    fetchHyperBeamResult: cuClient.fetchHyperBeamResultWith({ fetch, HB_URL, histogram, logger: processMsgLogger }),
+    fetchHyperBeamResult: cuClient.fetchHyperBeamResultWith({ fetch, histogram, logger: processMsgLogger, fetchHBProcesses }),
     isWallet: gatewayClient.isWalletWith({ fetch, histogram, getProcess, ARWEAVE_URL, SU_ROUTER_URL, HB_ROUTER_URL, ENABLE_HB_WALLET_CHECK, logger: processMsgLogger, setById, getById }),
     writeDataItemArweave: uploaderClient.uploadDataItemWith({ UPLOADER_URL, logger: processMsgLogger, fetch, histogram }),
     isHyperBeamProcess: gatewayClient.isHyperBeamProcessWith({ getProcess, logger: processMsgLogger, getIsHyperBeamProcess, setIsHyperBeamProcess }),
@@ -505,7 +538,8 @@ export const createResultApis = async (ctx) => {
       wallet: MU_WALLET,
       address: walletAddress,
       fetchTransactions: gatewayClient.fetchTransactionDetailsWith({ fetch, GRAPHQL_URL })
-    })
+    }),
+    fetchHBProcesses
   })
 
   const processSpawnLogger = logger.child('processSpawn')
